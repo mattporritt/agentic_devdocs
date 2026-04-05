@@ -333,6 +333,53 @@ class SQLiteStore:
                 results.append(chunk)
         return results
 
+    def get_section_chunks(self, section_id: str) -> list[QueryResult]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    c.id AS chunk_id,
+                    0.0 AS score,
+                    c.content,
+                    d.source_path AS source_file_path,
+                    d.id AS document_id,
+                    d.title AS document_title,
+                    s.id AS section_id,
+                    s.section_title AS section_title,
+                    s.heading_path AS heading_path,
+                    c.token_count AS token_count,
+                    d.repo_commit_hash AS repo_commit_hash,
+                    c.chunk_order AS chunk_order,
+                    NULL AS snippet,
+                    c.metadata_json AS metadata_json
+                FROM chunks c
+                JOIN sections s ON s.id = c.section_id
+                JOIN documents d ON d.id = s.document_id
+                WHERE s.id = ?
+                ORDER BY c.chunk_order ASC
+                """,
+                (section_id,),
+            ).fetchall()
+        return [
+            QueryResult(
+                chunk_id=row["chunk_id"],
+                score=row["score"],
+                content=row["content"],
+                source_file_path=row["source_file_path"],
+                document_id=row["document_id"],
+                document_title=row["document_title"],
+                section_id=row["section_id"],
+                section_title=row["section_title"],
+                heading_path=row["heading_path"].split(" > ") if row["heading_path"] else [],
+                token_count=row["token_count"],
+                repo_commit_hash=row["repo_commit_hash"],
+                chunk_order=row["chunk_order"],
+                snippet=row["snippet"],
+                metadata_json=json.loads(row["metadata_json"]) if row["metadata_json"] else None,
+            )
+            for row in rows
+        ]
+
     def detailed_stats(self, limit: int = 10) -> dict[str, object]:
         with self.connect() as connection:
             overview = {

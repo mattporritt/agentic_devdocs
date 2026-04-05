@@ -82,6 +82,8 @@ class QueryResult(BaseModel):
     normalized_query: str | None = None
     snippet: str | None = None
     metadata_json: dict[str, Any] | None = None
+    rerank_score: float | None = None
+    rerank_breakdown: dict[str, float | int | str | list[str]] | None = None
 
 
 class ContextBundleChunk(BaseModel):
@@ -106,6 +108,7 @@ class ContextBundle(BaseModel):
     repo_commit_hash: str | None = None
     snippet: str | None = None
     chunks: list[ContextBundleChunk]
+    selection_strategy: str = "match_only"
 
 
 class EvalCase(BaseModel):
@@ -168,6 +171,10 @@ class EvalOutcome(BaseModel):
     matched_rule_type: str | None = None
     matched_result: EvalMatch | None = None
     failure_summary: str | None = None
+    preferred_result_rank: int | None = None
+    preferred_result_path: str | None = None
+    preferred_result_heading: str | None = None
+    ranking_diagnostic: str | None = None
 
 
 class EvalReport(BaseModel):

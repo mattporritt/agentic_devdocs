@@ -6,9 +6,9 @@ It is built to answer a practical question: when an agent is working on Moodle L
 
 The current phase focuses on three things:
 
-- reliable ingestion of the live public Moodle developer docs repository
-- lightweight retrieval evaluation against representative Moodle developer questions
-- compact context bundles that are easy for agentic tools to consume
+- field-aware ranking improvements over the FTS5 candidate set
+- compact context bundles that are easier for agentic tools to consume
+- weak-pass diagnostics that make retrieval tuning more actionable
 
 The current evaluation flow is intentionally stricter than earlier iterations:
 
@@ -57,7 +57,6 @@ Still deferred:
 
 - HTTP API
 - embeddings or vector search
-- reranking
 - non-markdown formats
 - Moodle-specific semantic enrichment
 
@@ -70,9 +69,9 @@ Pipeline:
 3. Sections are chunked using token counts from a pluggable tokenizer interface.
 4. Documents, sections, and chunks are written into SQLite.
 5. Chunk content is indexed with FTS5 for retrieval.
-6. Queries are normalized for safer FTS5 matching and lightly reranked using path/title/heading context.
+6. Queries are normalized for safer FTS5 matching, then reranked with explicit field-aware scoring.
 7. Canonical docs are preferred over equivalent versioned docs when the match quality is otherwise similar.
-8. `query`, `stats`, inspect commands, and `eval` expose the corpus in a debuggable way.
+8. `query`, `stats`, inspect commands, and `eval` expose the corpus in a debuggable way, including ranking diagnostics for weak passes.
 
 Core modules:
 
@@ -169,6 +168,7 @@ agentic-docs query \
   --top-k 3 \
   --context-bundle \
   --include-next \
+  --bundle-max-tokens 350 \
   --json
 ```
 
@@ -219,6 +219,8 @@ Useful flags:
 - `--context-bundle`: return compact agent-oriented bundles instead of bare chunks
 - `--include-previous`: include the previous chunk in the bundle
 - `--include-next`: include the next chunk in the bundle
+- `--bundle-max-tokens`: cap the context bundle size, truncating oversize matches if necessary
+- `--explain-ranking`: include the explicit reranking score breakdown
 - `--json`: machine-readable output
 
 Returned data includes:
@@ -234,6 +236,7 @@ Returned data includes:
 - repo commit hash
 - normalized query
 - content snippet
+- rerank score and score breakdown when requested
 
 ### `stats`
 
@@ -284,7 +287,7 @@ agentic-docs verify-devdocs \
 Run the lightweight retrieval evaluation harness.
 
 ```bash
-agentic-docs eval --db-path <path> --eval-file ./evals/moodle_devdocs_eval.yaml
+agentic-docs eval --db-path <path> --eval-file ./evals/moodle_devdocs_eval.yaml --show-weak-details
 ```
 
 The eval command reports:
@@ -295,6 +298,7 @@ The eval command reports:
 - top-1, top-3, and top-5 weak-pass rates
 - per-query strong pass / weak pass / miss
 - the highest-ranked matching result
+- preferred-result rank and ranking diagnostics for weak passes when requested
 - failure summaries for misses
 
 Use `--json` for machine-readable output suitable for automation or later comparison between runs.
@@ -339,7 +343,23 @@ To reduce retrieval duplication and noise:
 - near-duplicate results with the same canonical path and heading signature are suppressed conservatively
 - versioned docs are still allowed when no canonical result is as good
 
-This is an explicit post-processing preference, not an opaque ranking model.
+This preference is now part of the explicit reranking layer, alongside title, section, heading, path, and chunk-quality signals.
+
+## Field-Aware Ranking
+
+SQLite FTS5 remains the lexical retrieval base, but final ordering is adjusted with a small explicit reranker.
+
+Current scoring signals include:
+
+- lexical FTS score from the candidate set
+- overlap with document title, section title, heading path, and source path
+- phrase hits in document and section titles
+- canonical-doc preference
+- subsystem-path preference when the query clearly targets a subsystem page
+- conservative penalties for example-heavy or low-signal chunks
+- chunk-size quality heuristics
+
+Use `agentic-docs query ... --explain-ranking` to inspect the weighted score breakdown for each result.
 
 ## Retrieval Evaluation
 
@@ -385,6 +405,8 @@ The report exposes:
 - weak-pass counts and rates
 - misses
 - matched rule type and matched result rank per query
+- preferred-result rank when a better target was retrieved but ranked too low
+- concise ranking diagnostics for weak passes and ranking misses
 
 This keeps failures understandable and easy to tune against.
 
@@ -403,7 +425,15 @@ Bare chunk retrieval is useful for debugging, but agent workflows usually need a
 - heading path
 - token counts
 - repo commit hash
-- optional adjacent chunks
+- a selection strategy marker such as `match_only`, `section_window`, or `truncated_match`
+- optional adjacent chunks from the same section when they fit within the token budget
+
+Bundles are assembled conservatively:
+
+- the matched chunk is always included
+- oversize matched chunks are truncated to the requested bundle budget
+- same-section adjacent chunks are added only when explicitly requested and they still fit the budget
+- repeated heading prefixes are stripped from adjacent context to reduce prompt noise
 
 This is still intentionally simple. It is not a full prompt-assembly system, but it is a practical bridge toward agent-ready retrieval.
 
@@ -439,6 +469,8 @@ Coverage currently includes:
 - query normalization and context bundles
 - canonical-doc preference
 - strict eval file loading and strong/weak/miss scoring
+- field-aware reranking and explanation output
+- weak-pass diagnostics
 - CLI ingest/query/eval sanity
 
 ## Current limitations
@@ -449,13 +481,13 @@ Coverage currently includes:
 - Evaluation matching is still substring-based and intentionally explicit; it is stricter than before, but still not semantic understanding.
 - Context bundles are compact retrieval packages, not yet full prompt construction.
 - Canonical-doc preference and MDX cleanup are conservative heuristics rather than full corpus normalization.
+- Field-aware ranking is hand-tuned and inspectable, not learned; expect more iteration as weak passes change.
 
 ## Future roadmap
 
 Likely next steps after v1:
 
 - embeddings and hybrid retrieval
-- lightweight reranking
 - Moodle-specific enrichment for common doc types
 - result formatting tuned for downstream agent prompts
 - incremental reindexing instead of full rebuilds

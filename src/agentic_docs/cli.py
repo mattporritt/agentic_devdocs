@@ -77,6 +77,8 @@ def query(
     context_bundle: Annotated[bool, typer.Option("--context-bundle", help="Return compact agent-oriented context bundles.")] = False,
     include_previous: Annotated[bool, typer.Option(help="Include the previous chunk in context bundles.")] = False,
     include_next: Annotated[bool, typer.Option(help="Include the next chunk in context bundles.")] = False,
+    bundle_max_tokens: Annotated[int, typer.Option(help="Maximum tokens to include in a context bundle.")] = 600,
+    explain_ranking: Annotated[bool, typer.Option("--explain-ranking", help="Include reranking signal breakdowns in the output.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Query the indexed chunks using SQLite FTS5 lexical search."""
@@ -89,6 +91,7 @@ def query(
             results=results,
             include_previous=include_previous,
             include_next=include_next,
+            bundle_max_tokens=bundle_max_tokens,
         )
         if json_output:
             _emit([bundle.model_dump() for bundle in bundles], True)
@@ -101,6 +104,7 @@ def query(
             typer.echo(f"section_title: {bundle.section_title}")
             typer.echo(f"heading_path: {' > '.join(bundle.heading_path)}")
             typer.echo(f"bundle_token_count: {bundle.bundle_token_count}")
+            typer.echo(f"selection_strategy: {bundle.selection_strategy}")
             typer.echo(f"repo_commit_hash: {bundle.repo_commit_hash}")
             if bundle.snippet:
                 typer.echo(f"snippet: {bundle.snippet}")
@@ -123,6 +127,9 @@ def query(
         typer.echo(f"repo_commit_hash: {result.repo_commit_hash}")
         typer.echo(f"normalized_query: {result.normalized_query}")
         typer.echo(f"snippet: {result.snippet}")
+        if explain_ranking and result.rerank_score is not None:
+            typer.echo(f"rerank_score: {result.rerank_score:.3f}")
+            typer.echo(f"rerank_breakdown: {json.dumps(result.rerank_breakdown, sort_keys=True)}")
         typer.echo(result.content)
         typer.echo("")
 
@@ -242,6 +249,7 @@ def verify_devdocs(
 def eval(
     db_path: Annotated[Path, typer.Option(help="SQLite database path.")],
     eval_file: Annotated[Path, typer.Option(help="Path to the retrieval eval YAML or JSON file.")],
+    show_weak_details: Annotated[bool, typer.Option(help="Show extra diagnostics for weak passes and ranking misses.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Run the lightweight retrieval evaluation harness."""
@@ -267,6 +275,12 @@ def eval(
             typer.echo(
                 f"  best_match_rank={outcome.matched_result.rank} path={outcome.matched_result.source_file_path} rule={outcome.matched_result.matched_rule_type} matched_on={', '.join(outcome.matched_result.matched_on)}"
             )
+        if show_weak_details and outcome.preferred_result_rank is not None:
+            typer.echo(
+                f"  preferred_result_rank={outcome.preferred_result_rank} path={outcome.preferred_result_path} heading={outcome.preferred_result_heading}"
+            )
+        if show_weak_details and outcome.ranking_diagnostic:
+            typer.echo(f"  ranking={outcome.ranking_diagnostic}")
         if outcome.failure_summary:
             typer.echo(f"  failure={outcome.failure_summary}")
 

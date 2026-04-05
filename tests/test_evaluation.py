@@ -103,3 +103,46 @@ def test_run_eval_distinguishes_weak_pass(tmp_path: Path) -> None:
 
     assert report.outcomes[0].grade == "WEAK PASS"
     assert report.top_1.weak_pass_rate == 1.0
+
+
+def test_run_eval_reports_preferred_result_rank_for_weak_pass(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "apis.md").write_text(
+        "---\n"
+        "title: API overview\n"
+        "---\n\n"
+        "Moodle APIs include events, forms, tasks, and output APIs.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "events.md").write_text(
+        "# Events API\n\n## Event observers\n\nRegister plugin observers in db/events.php.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: events",
+                "    query: How do events work in plugins?",
+                "    preferred_document_paths:",
+                "      - events.md",
+                "    acceptable_document_paths:",
+                "      - apis.md",
+                "    acceptable_heading_substrings:",
+                "      - API",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_eval(db_path=db_path, eval_file=eval_file)
+
+    assert report.outcomes[0].grade in {"STRONG PASS", "WEAK PASS"}
+    if report.outcomes[0].grade == "WEAK PASS":
+        assert report.outcomes[0].preferred_result_rank is not None
+        assert report.outcomes[0].ranking_diagnostic is not None

@@ -97,9 +97,33 @@ def _failure_summary(case: EvalCase, results: list[QueryResult]) -> str:
     return "Weak lexical match; no preferred or acceptable target matched"
 
 
+def _ranking_diagnostic(
+    grade: str,
+    matched_rank: int | None,
+    preferred_match: EvalMatch | None,
+    results: list[QueryResult],
+) -> str | None:
+    if preferred_match is not None and grade == "WEAK PASS":
+        top_path = results[0].source_file_path if results else "no result"
+        return (
+            f"Preferred result was present at rank {preferred_match.rank} but lost to a weaker hit at rank 1 "
+            f"({top_path}). This looks like a ranking issue, not a recall issue."
+        )
+    if preferred_match is not None and preferred_match.rank > 1:
+        return f"Preferred result was retrieved at rank {preferred_match.rank}; top-1 ranking still needs improvement."
+    if grade == "MISS" and results:
+        return "No preferred or acceptable target matched in the retrieved set; inspect top lexical hits for query drift."
+    if grade == "MISS":
+        return "No candidates were retrieved."
+    if matched_rank is not None and matched_rank > 1:
+        return f"Correct target was retrieved at rank {matched_rank}, so ranking headroom remains."
+    return None
+
+
 def _score_case(case: EvalCase, results: list[QueryResult]) -> EvalOutcome:
     matched_result: EvalMatch | None = None
     matched_rank: int | None = None
+    preferred_result: EvalMatch | None = None
     grade = "MISS"
     matched_rule_type: str | None = None
 
@@ -107,10 +131,7 @@ def _score_case(case: EvalCase, results: list[QueryResult]) -> EvalOutcome:
         result_grade, matched_on, rule_type = _grade_result(case, result)
         if result_grade == "MISS":
             continue
-        matched_rank = rank
-        grade = result_grade
-        matched_rule_type = rule_type
-        matched_result = EvalMatch(
+        candidate_match = EvalMatch(
             rank=rank,
             chunk_id=result.chunk_id,
             source_file_path=result.source_file_path,
@@ -123,6 +144,12 @@ def _score_case(case: EvalCase, results: list[QueryResult]) -> EvalOutcome:
             grade=result_grade,
             matched_rule_type=rule_type or "",
         )
+        if result_grade == "STRONG PASS" and preferred_result is None:
+            preferred_result = candidate_match
+        matched_rank = rank
+        grade = result_grade
+        matched_rule_type = rule_type
+        matched_result = candidate_match
         if result_grade == "STRONG PASS":
             break
         if result_grade == "WEAK PASS":
@@ -152,6 +179,10 @@ def _score_case(case: EvalCase, results: list[QueryResult]) -> EvalOutcome:
         matched_rule_type=matched_rule_type,
         matched_result=matched_result,
         failure_summary=None if grade != "MISS" else _failure_summary(case, results),
+        preferred_result_rank=preferred_result.rank if preferred_result else None,
+        preferred_result_path=preferred_result.source_file_path if preferred_result else None,
+        preferred_result_heading=" > ".join(preferred_result.heading_path) if preferred_result else None,
+        ranking_diagnostic=_ranking_diagnostic(grade, matched_rank, preferred_result, results),
     )
 
 
