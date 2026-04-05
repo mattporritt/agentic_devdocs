@@ -201,7 +201,20 @@ class SQLiteStore:
                 """,
                 (document_id,),
             ).fetchall()
-        return {"document": dict(document), "sections": [dict(row) for row in sections]}
+            chunk_stats = connection.execute(
+                """
+                SELECT COUNT(*) AS chunk_count, COALESCE(SUM(token_count), 0) AS total_tokens
+                FROM chunks c
+                JOIN sections s ON s.id = c.section_id
+                WHERE s.document_id = ?
+                """,
+                (document_id,),
+            ).fetchone()
+        return {
+            "document": dict(document),
+            "sections": [dict(row) for row in sections],
+            "chunk_stats": dict(chunk_stats) if chunk_stats is not None else {},
+        }
 
     def query(self, query_text: str, top_k: int) -> list[QueryResult]:
         with self.connect() as connection:
@@ -220,6 +233,7 @@ class SQLiteStore:
                     c.token_count AS token_count,
                     d.repo_commit_hash AS repo_commit_hash,
                     c.chunk_order AS chunk_order,
+                    snippet(chunks_fts, 1, '[', ']', '...', 20) AS snippet,
                     c.metadata_json AS metadata_json
                 FROM chunks_fts
                 JOIN chunks c ON c.id = chunks_fts.chunk_id
@@ -246,7 +260,141 @@ class SQLiteStore:
                 token_count=row["token_count"],
                 repo_commit_hash=row["repo_commit_hash"],
                 chunk_order=row["chunk_order"],
+                snippet=row["snippet"],
                 metadata_json=json.loads(row["metadata_json"]) if row["metadata_json"] else None,
             )
             for row in rows
         ]
+
+    def get_chunk_by_id(self, chunk_id: str) -> QueryResult | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    c.id AS chunk_id,
+                    0.0 AS score,
+                    c.content AS content,
+                    d.source_path AS source_file_path,
+                    d.id AS document_id,
+                    d.title AS document_title,
+                    s.id AS section_id,
+                    s.section_title AS section_title,
+                    s.heading_path AS heading_path,
+                    c.token_count AS token_count,
+                    d.repo_commit_hash AS repo_commit_hash,
+                    c.chunk_order AS chunk_order,
+                    NULL AS snippet,
+                    c.metadata_json AS metadata_json
+                FROM chunks c
+                JOIN sections s ON s.id = c.section_id
+                JOIN documents d ON d.id = s.document_id
+                WHERE c.id = ?
+                """,
+                (chunk_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return QueryResult(
+            chunk_id=row["chunk_id"],
+            score=row["score"],
+            content=row["content"],
+            source_file_path=row["source_file_path"],
+            document_id=row["document_id"],
+            document_title=row["document_title"],
+            section_id=row["section_id"],
+            section_title=row["section_title"],
+            heading_path=row["heading_path"].split(" > ") if row["heading_path"] else [],
+            token_count=row["token_count"],
+            repo_commit_hash=row["repo_commit_hash"],
+            chunk_order=row["chunk_order"],
+            snippet=row["snippet"],
+            metadata_json=json.loads(row["metadata_json"]) if row["metadata_json"] else None,
+        )
+
+    def get_adjacent_chunks(self, chunk_id: str, include_previous: bool, include_next: bool) -> list[QueryResult]:
+        with self.connect() as connection:
+            pivot = connection.execute(
+                "SELECT prev_chunk_id, next_chunk_id FROM chunks WHERE id = ?",
+                (chunk_id,),
+            ).fetchone()
+        if pivot is None:
+            return []
+
+        adjacent_ids: list[str] = []
+        if include_previous and pivot["prev_chunk_id"]:
+            adjacent_ids.append(pivot["prev_chunk_id"])
+        if include_next and pivot["next_chunk_id"]:
+            adjacent_ids.append(pivot["next_chunk_id"])
+
+        results: list[QueryResult] = []
+        for adjacent_id in adjacent_ids:
+            chunk = self.get_chunk_by_id(adjacent_id)
+            if chunk is not None:
+                results.append(chunk)
+        return results
+
+    def detailed_stats(self, limit: int = 10) -> dict[str, object]:
+        with self.connect() as connection:
+            overview = {
+                "documents": connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0],
+                "sections": connection.execute("SELECT COUNT(*) FROM sections").fetchone()[0],
+                "chunks": connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0],
+                "avg_chunk_tokens": connection.execute(
+                    "SELECT COALESCE(AVG(token_count), 0) FROM chunks"
+                ).fetchone()[0],
+            }
+            chunks_per_document = connection.execute(
+                """
+                SELECT d.source_path, d.title, COUNT(c.id) AS chunk_count
+                FROM documents d
+                LEFT JOIN sections s ON s.document_id = d.id
+                LEFT JOIN chunks c ON c.section_id = s.id
+                GROUP BY d.id
+                ORDER BY chunk_count DESC, d.source_path ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            largest_chunks = connection.execute(
+                """
+                SELECT c.id AS chunk_id, d.source_path, s.heading_path, c.token_count
+                FROM chunks c
+                JOIN sections s ON s.id = c.section_id
+                JOIN documents d ON d.id = s.document_id
+                ORDER BY c.token_count DESC, c.id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            small_chunks = connection.execute(
+                """
+                SELECT c.id AS chunk_id, d.source_path, s.heading_path, c.token_count
+                FROM chunks c
+                JOIN sections s ON s.id = c.section_id
+                JOIN documents d ON d.id = s.document_id
+                WHERE c.token_count <= 30
+                ORDER BY c.token_count ASC, c.id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+            duplicate_candidates = connection.execute(
+                """
+                SELECT COUNT(*) AS duplicate_count, MIN(c.id) AS sample_chunk_id, MIN(d.source_path) AS sample_source_path
+                FROM chunks c
+                JOIN sections s ON s.id = c.section_id
+                JOIN documents d ON d.id = s.document_id
+                GROUP BY c.content
+                HAVING COUNT(*) > 1
+                ORDER BY duplicate_count DESC, sample_chunk_id ASC
+                LIMIT ?
+                """,
+                (limit,),
+            ).fetchall()
+        return {
+            "overview": overview,
+            "chunks_per_document": [dict(row) for row in chunks_per_document],
+            "largest_chunks": [dict(row) for row in largest_chunks],
+            "small_chunks": [dict(row) for row in small_chunks],
+            "duplicate_chunk_candidates": [dict(row) for row in duplicate_candidates],
+        }

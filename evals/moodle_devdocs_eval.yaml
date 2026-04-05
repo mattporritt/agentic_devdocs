@@ -1,0 +1,194 @@
+cases:
+  - id: admin-settings
+    query: "How do I add admin settings for a plugin?"
+    description: "Plugin configuration exposed through admin settings and settings.php."
+    preferred_document_paths:
+      - "docs/apis/subsystems/admin/index.md"
+      - "docs/apis/_files/settings-php.mdx"
+    acceptable_document_paths:
+      - "docs/apis.md"
+      - "docs/apis/plugintypes/blocks/index.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Admin settings"
+      - "settings"
+    top_k: 5
+  - id: plugin-upgrade-steps
+    query: "How do plugin upgrade steps work in Moodle?"
+    description: "Upgrade steps and db/upgrade.php."
+    preferred_document_paths:
+      - "docs/guides/upgrade/index.md"
+      - "docs/apis/_files/db-upgrade-php.mdx"
+      - "docs/apis/_files/upgrade-php.mdx"
+    acceptable_document_paths:
+      - "docs/apis/plugintypes/mod/index.mdx"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "db/upgrade.php"
+      - "Upgrade helpers"
+      - "Upgrade"
+    top_k: 5
+  - id: capabilities-access
+    query: "How do I define capabilities in access.php?"
+    description: "Capabilities and db/access.php."
+    preferred_document_paths:
+      - "docs/apis/subsystems/access.md"
+      - "docs/apis/_files/db-access-php.mdx"
+    acceptable_document_paths:
+      - "docs/apis/commonfiles/index.mdx"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Access API"
+      - "How to define new capabilities in plugins"
+      - "db/access.php"
+    top_k: 5
+  - id: scheduled-tasks
+    query: "How do scheduled tasks get registered?"
+    description: "Task registration via db/tasks.php."
+    preferred_document_paths:
+      - "docs/apis/subsystems/task/scheduled.md"
+      - "docs/apis/_files/db-tasks-php.mdx"
+    acceptable_document_paths:
+      - "docs/apis/commonfiles/db-tasks.php/index.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "scheduled tasks"
+      - "db/tasks.php"
+    top_k: 5
+  - id: web-services
+    query: "How do I define web services for a plugin?"
+    description: "Writing a service and db/services.php."
+    preferred_document_paths:
+      - "docs/apis/subsystems/external/writing-a-service.md"
+      - "docs/apis/_files/db-services-php.mdx"
+    acceptable_document_paths:
+      - "docs/apis/subsystems/external/index.md"
+      - "docs/apis/subsystems/external/functions.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Web services"
+      - "External functions"
+      - "Writing a new service"
+      - "db/services.php"
+    top_k: 5
+  - id: forms-validation
+    query: "How does the Forms API validation pattern work?"
+    description: "Form API guidance and validation examples."
+    preferred_document_paths:
+      - "docs/apis/subsystems/form/index.md"
+    acceptable_document_paths:
+      - "docs/apis/plugintypes/mod/index.mdx"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Forms API"
+      - "validation"
+      - "addRule"
+    disallowed_document_paths:
+      - "docs/apis/subsystems/xapi/index.md"
+    top_k: 5
+  - id: language-strings
+    query: "How do language strings work in plugins?"
+    description: "Plugin language strings and lang files."
+    preferred_document_paths:
+      - "docs/apis/_files/lang.md"
+    acceptable_document_paths:
+      - "docs/apis/plugintypes/mod/index.mdx"
+      - "docs/apis/plugintypes/theme/_examples/lang.md"
+      - "docs/apis/plugintypes/availability/_examples/lang.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "language strings"
+      - "lang/en"
+      - "Language string definitions"
+      - "Language files"
+    disallowed_document_paths:
+      - "docs/guides/javascript/index.md"
+    top_k: 5
+  - id: output-renderers
+    query: "How do renderers or output APIs work?"
+    description: "Output API and renderers."
+    preferred_document_paths:
+      - "docs/apis/subsystems/output/index.md"
+    acceptable_document_paths:
+      - "docs/apis/plugintypes/format/migration.md"
+      - "docs/guides/templates/index.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "output"
+      - "Templates"
+      - "renderers"
+    top_k: 5
+  - id: mustache-templates
+    query: "How do Mustache templates fit into Moodle output?"
+    description: "Mustache templating guide."
+    preferred_document_paths:
+      - "docs/guides/templates/index.md"
+    acceptable_document_paths:
+      - "docs/apis/plugintypes/format/index.md"
+      - "docs/apis/subsystems/output/index.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "templates"
+      - "Mustache"
+    top_k: 5
+  - id: privacy-providers
+    query: "How do privacy providers work for plugins?"
+    description: "Privacy API provider guidance."
+    preferred_document_paths:
+      - "docs/apis/subsystems/privacy/index.md"
+    acceptable_document_paths:
+      - "docs/apis/subsystems/privacy/utils.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Privacy API"
+      - "metadata providers"
+      - "request providers"
+    disallowed_document_paths:
+      - "docs/apis/plugintypes/ai/provider.md"
+    top_k: 5
+  - id: events
+    query: "How do events work in plugins?"
+    description: "Event observers and db/events.php."
+    preferred_document_paths:
+      - "docs/apis/_files/db-events-php.mdx"
+      - "docs/apis/subsystems/events/index.md"
+    acceptable_document_paths:
+      - "docs/apis.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Events API"
+      - "db/events.php"
+      - "Event observers"
+    disallowed_document_paths:
+      - "docs/apis/subsystems/output/inplace.md"
+      - "docs/apis/plugintypes/assign/feedback.md"
+      - "docs/apis/plugintypes/assign/submission.md"
+    top_k: 5
+  - id: phpunit
+    query: "How do I write PHPUnit tests in Moodle?"
+    description: "PHPUnit testing guide."
+    preferred_document_paths:
+      - "docs/guides/testing/index.md"
+      - "general/development/tools/phpunit/index.md"
+    acceptable_document_paths:
+      - "general/development/tools/gha.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Writing PHPUnit tests"
+      - "PHPUnit executions"
+      - "PHPUnit"
+    top_k: 5
+  - id: behat
+    query: "How do I write Behat tests in Moodle?"
+    description: "Acceptance testing guide."
+    preferred_document_paths:
+      - "general/development/tools/behat/writing.md"
+      - "general/development/tools/behat/index.md"
+    acceptable_document_paths:
+      - "general/development/tools/mdk.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Executing behat tests"
+      - "Writing acceptance tests"
+      - "Behat"
+    top_k: 5

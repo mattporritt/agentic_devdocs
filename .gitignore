@@ -2,9 +2,11 @@
 .vendor/
 .pytest_cache/
 __pycache__/
+.DS_Store
 *.pyc
 *.pyo
 *.db
 *.sqlite
 _data/
 _smoke_test/
+verification_runs/

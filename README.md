@@ -1,8 +1,20 @@
 # agentic-docs
 
-`agentic-docs` is an internal Python CLI for turning developer documentation into compact, inspectable retrieval artifacts for AI coding agents.
+`agentic-docs` is an internal Python CLI for turning Moodle developer documentation into compact, inspectable retrieval artifacts for AI coding agents.
 
-Its v1 focus is narrow on purpose: ingest markdown documentation from a git repository, preserve structure, chunk it with model-aware token limits, and index it into SQLite with FTS5 so agents can retrieve high-signal Moodle documentation without wasting context on whole pages.
+It is built to answer a practical question: when an agent is working on Moodle LMS code, can we retrieve the smallest useful documentation context instead of flooding the model with whole pages?
+
+The current phase focuses on three things:
+
+- reliable ingestion of the live public Moodle developer docs repository
+- lightweight retrieval evaluation against representative Moodle developer questions
+- compact context bundles that are easy for agentic tools to consume
+
+The current evaluation flow is intentionally stricter than earlier iterations:
+
+- `STRONG PASS` means retrieval found a clearly correct target
+- `WEAK PASS` means retrieval found a related fallback but not the best target
+- `MISS` means retrieval failed to surface an acceptably correct target within the configured top-k
 
 ## Why this exists
 
@@ -23,9 +35,9 @@ Naive approaches tend to:
 - traceable back to source files and headings
 - easy to inspect when retrieval quality is poor
 
-## V1 scope
+## Scope
 
-Included in v1:
+Included currently:
 
 - git repository sync
 - markdown discovery and parsing
@@ -33,10 +45,15 @@ Included in v1:
 - token-aware chunking with overlap
 - SQLite persistence with explicit tables
 - FTS5 lexical retrieval
-- inspect and stats commands
+- inspect and richer stats commands
+- eval harness with curated Moodle retrieval cases
+- agent-oriented context bundle output
+- repeatable Moodle devdocs verification workflow
+- canonical-doc preference over equivalent versioned duplicates
+- conservative MDX wrapper-noise reduction
 - pytest coverage for the core pipeline
 
-Deferred in v1:
+Still deferred:
 
 - HTTP API
 - embeddings or vector search
@@ -53,7 +70,9 @@ Pipeline:
 3. Sections are chunked using token counts from a pluggable tokenizer interface.
 4. Documents, sections, and chunks are written into SQLite.
 5. Chunk content is indexed with FTS5 for retrieval.
-6. `query`, `stats`, and inspect commands expose the indexed corpus in a debuggable way.
+6. Queries are normalized for safer FTS5 matching and lightly reranked using path/title/heading context.
+7. Canonical docs are preferred over equivalent versioned docs when the match quality is otherwise similar.
+8. `query`, `stats`, inspect commands, and `eval` expose the corpus in a debuggable way.
 
 Core modules:
 
@@ -63,6 +82,8 @@ Core modules:
 - `agentic_docs.tokenizers`: tokenizer abstraction plus OpenAI/tiktoken adapter
 - `agentic_docs.chunking`: token-aware retrieval chunk construction
 - `agentic_docs.storage`: SQLite schema, persistence, FTS5, and inspection helpers
+- `agentic_docs.query_service`: query normalization, retrieval, and context bundle assembly
+- `agentic_docs.evaluation`: eval loading and scoring
 - `agentic_docs.cli`: Typer CLI
 
 ## Installation
@@ -74,6 +95,31 @@ python3.12 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e ".[dev]"
 ```
+
+## Verify Against Moodle Devdocs
+
+This is the recommended end-to-end workflow against the live public repo:
+
+```bash
+agentic-docs verify-devdocs \
+  --repo-url https://github.com/moodle/devdocs/ \
+  --local-path ./_smoke_test/devdocs \
+  --db-path ./_smoke_test/agentic-docs.db \
+  --tokenizer openai \
+  --max-tokens 400 \
+  --overlap-tokens 60
+```
+
+This command:
+
+- syncs the repo locally
+- ingests the docs into SQLite
+- prints stats and diagnostic summaries
+- runs a few smoke-test queries
+
+The current public Moodle devdocs repo contains markdown and MDX content across directories such as `docs/`, `versioned_docs/`, and `general/`, and the current ingestion path is intentionally broad enough to cover that real structure.
+
+When the corpus contains both canonical and versioned copies of substantively similar docs, retrieval prefers the canonical non-versioned path but still allows versioned docs through when they remain the best available match.
 
 ## Example workflow
 
@@ -114,6 +160,26 @@ Machine-readable output:
 agentic-docs query "form api moodle" --db-path ./_data/devdocs.db --top-k 5 --json
 ```
 
+Agent-oriented context bundles:
+
+```bash
+agentic-docs query \
+  "Forms API validation" \
+  --db-path ./_data/devdocs.db \
+  --top-k 3 \
+  --context-bundle \
+  --include-next \
+  --json
+```
+
+Run the starter retrieval evaluation set:
+
+```bash
+agentic-docs eval \
+  --db-path ./_data/devdocs.db \
+  --eval-file ./evals/moodle_devdocs_eval.yaml
+```
+
 ## CLI commands
 
 ### `sync`
@@ -148,6 +214,13 @@ Run lexical retrieval against indexed chunks.
 agentic-docs query "form api moodle" --db-path <path> --top-k 5
 ```
 
+Useful flags:
+
+- `--context-bundle`: return compact agent-oriented bundles instead of bare chunks
+- `--include-previous`: include the previous chunk in the bundle
+- `--include-next`: include the next chunk in the bundle
+- `--json`: machine-readable output
+
 Returned data includes:
 
 - chunk id
@@ -159,6 +232,8 @@ Returned data includes:
 - heading path
 - token count
 - repo commit hash
+- normalized query
+- content snippet
 
 ### `stats`
 
@@ -167,6 +242,15 @@ Show counts for documents, sections, and chunks.
 ```bash
 agentic-docs stats --db-path <path>
 ```
+
+Stats now include:
+
+- corpus overview counts
+- average chunk token count
+- top documents by chunk count
+- largest chunks
+- very small chunks
+- exact duplicate chunk candidates
 
 ### `inspect-chunk`
 
@@ -183,6 +267,37 @@ Inspect a document and its extracted sections.
 ```bash
 agentic-docs inspect-doc <document-id> --db-path <path>
 ```
+
+### `verify-devdocs`
+
+Run the repeatable public Moodle devdocs verification workflow.
+
+```bash
+agentic-docs verify-devdocs \
+  --repo-url https://github.com/moodle/devdocs/ \
+  --local-path ./_smoke_test/devdocs \
+  --db-path ./_smoke_test/agentic-docs.db
+```
+
+### `eval`
+
+Run the lightweight retrieval evaluation harness.
+
+```bash
+agentic-docs eval --db-path <path> --eval-file ./evals/moodle_devdocs_eval.yaml
+```
+
+The eval command reports:
+
+- total query count
+- strong pass, weak pass, and miss counts
+- top-1, top-3, and top-5 strong-pass rates
+- top-1, top-3, and top-5 weak-pass rates
+- per-query strong pass / weak pass / miss
+- the highest-ranked matching result
+- failure summaries for misses
+
+Use `--json` for machine-readable output suitable for automation or later comparison between runs.
 
 ## Schema
 
@@ -214,6 +329,96 @@ The current strategy:
 
 This gives agents compact chunks that are usually easier to rank and cheaper to pass into a model context window.
 
+## Canonical Preference
+
+The Moodle devdocs corpus includes both canonical docs and versioned docs.
+
+To reduce retrieval duplication and noise:
+
+- canonical non-versioned docs are preferred over versioned docs when they are otherwise similar
+- near-duplicate results with the same canonical path and heading signature are suppressed conservatively
+- versioned docs are still allowed when no canonical result is as good
+
+This is an explicit post-processing preference, not an opaque ranking model.
+
+## Retrieval Evaluation
+
+The evaluation harness is intentionally lightweight. It is not a benchmark framework and it does not try to be statistically perfect.
+
+It is meant to answer practical questions during tuning:
+
+- do common Moodle developer questions retrieve the right docs?
+- are chunks compact but still useful?
+- is lexical retrieval good enough for now?
+- which misses point to chunking, indexing, query handling, or packaging problems?
+
+The starter eval file lives at [evals/moodle_devdocs_eval.yaml](/Users/mattp/projects/agentic_devdocs/evals/moodle_devdocs_eval.yaml) and uses explicit grading targets:
+
+- `preferred_document_paths` and `preferred_heading_substrings` for strong passes
+- `acceptable_document_paths` and `acceptable_heading_substrings` for weak passes
+- `disallowed_document_paths` for obviously wrong-but-lexically-close results
+
+It covers representative questions such as:
+
+- plugin admin settings
+- plugin upgrade steps
+- capabilities in `db/access.php`
+- scheduled tasks in `db/tasks.php`
+- web services
+- Forms API validation
+- language strings
+- output and templates
+- privacy providers
+- events
+- PHPUnit
+- Behat
+
+The grading logic is intentionally explicit:
+
+- strong pass: best acceptable hit is a preferred target
+- weak pass: best acceptable hit is fallback-only
+- miss: no preferred or acceptable target appears within the configured top-k
+
+The report exposes:
+
+- strong-pass counts and rates
+- weak-pass counts and rates
+- misses
+- matched rule type and matched result rank per query
+
+This keeps failures understandable and easy to tune against.
+
+It is normal and acceptable for stricter grading to reduce headline scores. Lower but more truthful scores are more useful for retrieval tuning than permissive scores that count loose lexical overlap as success.
+
+## Context Bundles
+
+Bare chunk retrieval is useful for debugging, but agent workflows usually need a slightly richer structure.
+
+`--context-bundle` returns compact bundles containing:
+
+- matched chunk content
+- source file path
+- document title
+- section title
+- heading path
+- token counts
+- repo commit hash
+- optional adjacent chunks
+
+This is still intentionally simple. It is not a full prompt-assembly system, but it is a practical bridge toward agent-ready retrieval.
+
+## MDX Noise Reduction
+
+Some Moodle devdocs pages use MDX wrappers, component tags, imports, and editorial comments that are useful for site rendering but poor retrieval targets.
+
+The current parser and chunker therefore apply conservative cleanup:
+
+- remove front-matter-adjacent MDX import/export lines from indexed section text
+- strip standalone wrapper/component lines and markdownlint/editorial comments
+- suppress very small low-signal chunks that are effectively wrapper residue
+
+This is intentionally conservative. The goal is to reduce obvious retrieval noise without trying to fully render MDX or discard real prose.
+
 ## Testing
 
 Run the test suite with:
@@ -225,18 +430,25 @@ pytest
 Coverage currently includes:
 
 - markdown discovery and section extraction
+- front matter title extraction
 - tokenizer behavior
 - token-aware chunking
+- low-signal MDX wrapper suppression
 - metadata preservation
 - SQLite indexing and retrieval basics
-- CLI ingest/query sanity
+- query normalization and context bundles
+- canonical-doc preference
+- strict eval file loading and strong/weak/miss scoring
+- CLI ingest/query/eval sanity
 
 ## Current limitations
 
 - Retrieval is lexical FTS-only in v1.
-- The markdown parser extracts section structure generically and does not yet add Moodle-specific semantics.
+- The markdown parser extracts section structure generically and does not yet add deeper Moodle-specific enrichment.
 - Anthropic support is designed for via the tokenizer abstraction, but only the OpenAI/tiktoken adapter is implemented.
-- Section extraction is heading-oriented and intentionally simple; deeper markdown semantics can be layered on in a later version.
+- Evaluation matching is still substring-based and intentionally explicit; it is stricter than before, but still not semantic understanding.
+- Context bundles are compact retrieval packages, not yet full prompt construction.
+- Canonical-doc preference and MDX cleanup are conservative heuristics rather than full corpus normalization.
 
 ## Future roadmap
 
@@ -247,6 +459,7 @@ Likely next steps after v1:
 - Moodle-specific enrichment for common doc types
 - result formatting tuned for downstream agent prompts
 - incremental reindexing instead of full rebuilds
+- better diagnostics for near-duplicate and low-signal chunks
 
 ## Notes for extension
 

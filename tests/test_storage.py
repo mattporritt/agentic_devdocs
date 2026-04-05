@@ -52,4 +52,4 @@ def test_sqlite_store_indexes_and_queries(tmp_path: Path) -> None:
     assert results[0].chunk_id == "chunk-1"
     assert results[0].document_title == "Moodle Forms"
     assert store.stats()["chunks"] == 1
-
+    assert store.detailed_stats(limit=5)["overview"]["chunks"] == 1

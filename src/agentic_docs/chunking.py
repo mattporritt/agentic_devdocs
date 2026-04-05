@@ -3,10 +3,14 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 
 from agentic_docs.models import ChunkMetadata, ChunkModel, DocumentModel, SectionModel
 from agentic_docs.tokenizers import Tokenizer
 from agentic_docs.utils import stable_id
+
+LOW_SIGNAL_LINE_PATTERN = re.compile(r"^\s*</?[A-Z][A-Za-z0-9_.]*(?:\s[^>]*)?/?>\s*$")
+WORD_PATTERN = re.compile(r"[A-Za-z]{3,}")
 
 
 @dataclass(slots=True)
@@ -119,9 +123,12 @@ def chunk_section(
                 start_offset=current_start,
                 end_offset=current_end,
             )
-            results.append(chunk)
-            chunk_order += 1
-            overlap_text = _tail_overlap(chunk.content.removeprefix(prefix), overlap_tokens, tokenizer)
+            if not _is_low_signal_chunk(chunk):
+                results.append(chunk)
+                chunk_order += 1
+                overlap_text = _tail_overlap(chunk.content.removeprefix(prefix), overlap_tokens, tokenizer)
+            else:
+                overlap_text = ""
             current_texts = []
             current_start = None
             current_end = None
@@ -143,7 +150,8 @@ def chunk_section(
             start_offset=current_start,
             end_offset=current_end,
         )
-        results.append(chunk)
+        if not _is_low_signal_chunk(chunk):
+            results.append(chunk)
 
     return results
 
@@ -186,3 +194,15 @@ def _build_chunk(
         metadata=metadata,
     )
 
+
+def _is_low_signal_chunk(chunk: ChunkModel) -> bool:
+    body = chunk.content
+    lines = [line.strip() for line in body.splitlines() if line.strip()]
+    if not lines:
+        return True
+    if all(LOW_SIGNAL_LINE_PATTERN.match(line) for line in lines):
+        return True
+    word_count = len(WORD_PATTERN.findall(body))
+    if chunk.token_count < 12 and word_count < 4:
+        return True
+    return False

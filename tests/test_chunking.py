@@ -42,3 +42,30 @@ def test_chunk_document_preserves_heading_context_and_overlap() -> None:
     assert chunks[1].prev_chunk_id == chunks[0].id
     assert all(chunk.token_count <= 30 for chunk in chunks)
 
+
+def test_chunk_document_skips_tiny_low_signal_chunks() -> None:
+    document = DocumentModel(
+        id="doc-2",
+        title="Wrapped",
+        metadata=DocumentMetadata(
+            source_path="wrapped.md",
+            repo_commit_hash="abc123",
+            last_modified_time=datetime.now(tz=timezone.utc),
+            file_hash="hash",
+        ),
+        sections=[
+            SectionModel(
+                id="sec-2",
+                document_id="doc-2",
+                section_order=0,
+                section_title="Wrapped",
+                heading_level=1,
+                heading_path=["Wrapped"],
+                content="<Thing />",
+            )
+        ],
+    )
+
+    chunks = chunk_document(document, OpenAITokenizer(), max_tokens=30, overlap_tokens=5)
+
+    assert chunks == []
