@@ -1,0 +1,10 @@
+.venv/
+.vendor/
+.pytest_cache/
+__pycache__/
+*.pyc
+*.pyo
+*.db
+*.sqlite
+_data/
+_smoke_test/

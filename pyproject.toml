@@ -1,0 +1,35 @@
+[build-system]
+requires = ["hatchling>=1.25"]
+build-backend = "hatchling.build"
+
+[project]
+name = "agentic-docs"
+version = "0.1.0"
+description = "CLI-first tooling to ingest markdown docs into AI-agent-friendly retrieval artifacts."
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "Proprietary" }
+authors = [
+  { name = "OpenAI Codex" }
+]
+dependencies = [
+  "markdown-it-py>=3.0.0",
+  "pydantic>=2.7.0",
+  "tiktoken>=0.7.0",
+  "typer>=0.12.3",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest>=8.2.0",
+]
+
+[project.scripts]
+agentic-docs = "agentic_docs.cli:app"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/agentic_docs"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+

@@ -1,0 +1,252 @@
+"""SQLite persistence and FTS5 retrieval support."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from pathlib import Path
+
+from agentic_docs.models import ChunkModel, DocumentModel, QueryResult
+
+
+SCHEMA = """
+PRAGMA foreign_keys = ON;
+
+CREATE TABLE IF NOT EXISTS documents (
+    id TEXT PRIMARY KEY,
+    source_path TEXT NOT NULL UNIQUE,
+    title TEXT NOT NULL,
+    repo_commit_hash TEXT,
+    last_modified_time TEXT,
+    file_hash TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS sections (
+    id TEXT PRIMARY KEY,
+    document_id TEXT NOT NULL REFERENCES documents(id) ON DELETE CASCADE,
+    heading_path TEXT NOT NULL,
+    heading_level INTEGER NOT NULL,
+    section_title TEXT,
+    section_order INTEGER NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS chunks (
+    id TEXT PRIMARY KEY,
+    section_id TEXT NOT NULL REFERENCES sections(id) ON DELETE CASCADE,
+    chunk_order INTEGER NOT NULL,
+    content TEXT NOT NULL,
+    token_count INTEGER NOT NULL,
+    start_offset INTEGER,
+    end_offset INTEGER,
+    prev_chunk_id TEXT,
+    next_chunk_id TEXT,
+    metadata_json TEXT
+);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS chunks_fts USING fts5(
+    chunk_id UNINDEXED,
+    content,
+    source_path,
+    document_title,
+    heading_path
+);
+"""
+
+
+class SQLiteStore:
+    """Simple explicit SQLite store for documents, sections, and chunks."""
+
+    def __init__(self, db_path: Path) -> None:
+        self.db_path = db_path
+        self.db_path.parent.mkdir(parents=True, exist_ok=True)
+
+    def connect(self) -> sqlite3.Connection:
+        connection = sqlite3.connect(self.db_path)
+        connection.row_factory = sqlite3.Row
+        return connection
+
+    def initialize(self) -> None:
+        with self.connect() as connection:
+            connection.executescript(SCHEMA)
+
+    def reindex(self) -> None:
+        with self.connect() as connection:
+            connection.execute("DELETE FROM chunks_fts")
+            connection.execute("DELETE FROM chunks")
+            connection.execute("DELETE FROM sections")
+            connection.execute("DELETE FROM documents")
+            connection.commit()
+
+    def store_document(self, document: DocumentModel, chunks: list[ChunkModel]) -> None:
+        with self.connect() as connection:
+            connection.execute("DELETE FROM chunks_fts WHERE source_path = ?", (document.metadata.source_path,))
+            connection.execute("DELETE FROM documents WHERE id = ?", (document.id,))
+            connection.execute(
+                """
+                INSERT OR REPLACE INTO documents (
+                    id, source_path, title, repo_commit_hash, last_modified_time, file_hash
+                ) VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    document.id,
+                    document.metadata.source_path,
+                    document.title,
+                    document.metadata.repo_commit_hash,
+                    document.metadata.last_modified_time.isoformat() if document.metadata.last_modified_time else None,
+                    document.metadata.file_hash,
+                ),
+            )
+            for section in document.sections:
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO sections (
+                        id, document_id, heading_path, heading_level, section_title, section_order
+                    ) VALUES (?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        section.id,
+                        section.document_id,
+                        " > ".join(section.heading_path),
+                        section.heading_level,
+                        section.section_title,
+                        section.section_order,
+                    ),
+                )
+            for chunk in chunks:
+                metadata_json = chunk.metadata.model_dump_json()
+                connection.execute(
+                    """
+                    INSERT OR REPLACE INTO chunks (
+                        id, section_id, chunk_order, content, token_count, start_offset,
+                        end_offset, prev_chunk_id, next_chunk_id, metadata_json
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    (
+                        chunk.id,
+                        chunk.section_id,
+                        chunk.chunk_order,
+                        chunk.content,
+                        chunk.token_count,
+                        chunk.start_offset,
+                        chunk.end_offset,
+                        chunk.prev_chunk_id,
+                        chunk.next_chunk_id,
+                        metadata_json,
+                    ),
+                )
+                metadata = chunk.metadata
+                connection.execute(
+                    """
+                    INSERT INTO chunks_fts (
+                        chunk_id, content, source_path, document_title, heading_path
+                    ) VALUES (?, ?, ?, ?, ?)
+                    """,
+                    (
+                        chunk.id,
+                        chunk.content,
+                        metadata.source_path,
+                        metadata.document_title,
+                        " > ".join(metadata.heading_path),
+                    ),
+                )
+            connection.commit()
+
+    def stats(self) -> dict[str, int]:
+        with self.connect() as connection:
+            documents = connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
+            sections = connection.execute("SELECT COUNT(*) FROM sections").fetchone()[0]
+            chunks = connection.execute("SELECT COUNT(*) FROM chunks").fetchone()[0]
+        return {"documents": documents, "sections": sections, "chunks": chunks}
+
+    def inspect_chunk(self, chunk_id: str) -> dict[str, object] | None:
+        with self.connect() as connection:
+            row = connection.execute(
+                """
+                SELECT
+                    c.id,
+                    c.section_id,
+                    c.chunk_order,
+                    c.content,
+                    c.token_count,
+                    c.start_offset,
+                    c.end_offset,
+                    c.prev_chunk_id,
+                    c.next_chunk_id,
+                    c.metadata_json
+                FROM chunks c
+                WHERE c.id = ?
+                """,
+                (chunk_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        data = dict(row)
+        data["metadata_json"] = json.loads(data["metadata_json"]) if data["metadata_json"] else None
+        return data
+
+    def inspect_document(self, document_id: str) -> dict[str, object] | None:
+        with self.connect() as connection:
+            document = connection.execute(
+                "SELECT * FROM documents WHERE id = ?",
+                (document_id,),
+            ).fetchone()
+            if document is None:
+                return None
+            sections = connection.execute(
+                """
+                SELECT id, heading_path, heading_level, section_title, section_order
+                FROM sections
+                WHERE document_id = ?
+                ORDER BY section_order ASC
+                """,
+                (document_id,),
+            ).fetchall()
+        return {"document": dict(document), "sections": [dict(row) for row in sections]}
+
+    def query(self, query_text: str, top_k: int) -> list[QueryResult]:
+        with self.connect() as connection:
+            rows = connection.execute(
+                """
+                SELECT
+                    c.id AS chunk_id,
+                    bm25(chunks_fts) AS score,
+                    c.content,
+                    d.source_path AS source_file_path,
+                    d.id AS document_id,
+                    d.title AS document_title,
+                    s.id AS section_id,
+                    s.section_title AS section_title,
+                    s.heading_path AS heading_path,
+                    c.token_count AS token_count,
+                    d.repo_commit_hash AS repo_commit_hash,
+                    c.chunk_order AS chunk_order,
+                    c.metadata_json AS metadata_json
+                FROM chunks_fts
+                JOIN chunks c ON c.id = chunks_fts.chunk_id
+                JOIN sections s ON s.id = c.section_id
+                JOIN documents d ON d.id = s.document_id
+                WHERE chunks_fts MATCH ?
+                ORDER BY score ASC
+                LIMIT ?
+                """,
+                (query_text, top_k),
+            ).fetchall()
+
+        return [
+            QueryResult(
+                chunk_id=row["chunk_id"],
+                score=row["score"],
+                content=row["content"],
+                source_file_path=row["source_file_path"],
+                document_id=row["document_id"],
+                document_title=row["document_title"],
+                section_id=row["section_id"],
+                section_title=row["section_title"],
+                heading_path=row["heading_path"].split(" > ") if row["heading_path"] else [],
+                token_count=row["token_count"],
+                repo_commit_hash=row["repo_commit_hash"],
+                chunk_order=row["chunk_order"],
+                metadata_json=json.loads(row["metadata_json"]) if row["metadata_json"] else None,
+            )
+            for row in rows
+        ]
