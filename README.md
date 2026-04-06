@@ -410,6 +410,8 @@ The report exposes:
 
 This keeps failures understandable and easy to tune against.
 
+`eval.json` is the canonical source of truth for a run. The plain-text eval output and any markdown summary should be rendered from the same in-memory `EvalReport`, and the code now performs an internal consistency check to fail fast if aggregate counts or rates ever diverge from the per-query outcomes.
+
 It is normal and acceptable for stricter grading to reduce headline scores. Lower but more truthful scores are more useful for retrieval tuning than permissive scores that count loose lexical overlap as success.
 
 ## Context Bundles

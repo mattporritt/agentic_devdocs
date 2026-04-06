@@ -9,7 +9,7 @@ from typing import Annotated
 import typer
 
 from agentic_docs.config import IngestConfig, QueryConfig
-from agentic_docs.evaluation import run_eval
+from agentic_docs.evaluation import render_eval_text, run_eval
 from agentic_docs.git_sync import current_commit_hash, sync_repository
 from agentic_docs.ingest import ingest_source
 from agentic_docs.query_service import build_context_bundles, query_chunks
@@ -258,31 +258,7 @@ def eval(
     if json_output:
         _emit(report.model_dump(), True)
         return
-    typer.echo(f"total_queries: {report.total_queries}")
-    typer.echo(f"strong_passes: {report.strong_passes}")
-    typer.echo(f"weak_passes: {report.weak_passes}")
-    typer.echo(f"misses: {report.misses}")
-    typer.echo(f"top_1_strong_pass_rate: {report.top_1.strong_pass_rate:.3f}")
-    typer.echo(f"top_1_weak_pass_rate: {report.top_1.weak_pass_rate:.3f}")
-    typer.echo(f"top_3_strong_pass_rate: {report.top_3.strong_pass_rate:.3f}")
-    typer.echo(f"top_3_weak_pass_rate: {report.top_3.weak_pass_rate:.3f}")
-    typer.echo(f"top_5_strong_pass_rate: {report.top_5.strong_pass_rate:.3f}")
-    typer.echo(f"top_5_weak_pass_rate: {report.top_5.weak_pass_rate:.3f}")
-    typer.echo("")
-    for outcome in report.outcomes:
-        typer.echo(f"{outcome.grade} {outcome.case_id}: {outcome.query}")
-        if outcome.matched_result is not None:
-            typer.echo(
-                f"  best_match_rank={outcome.matched_result.rank} path={outcome.matched_result.source_file_path} rule={outcome.matched_result.matched_rule_type} matched_on={', '.join(outcome.matched_result.matched_on)}"
-            )
-        if show_weak_details and outcome.preferred_result_rank is not None:
-            typer.echo(
-                f"  preferred_result_rank={outcome.preferred_result_rank} path={outcome.preferred_result_path} heading={outcome.preferred_result_heading}"
-            )
-        if show_weak_details and outcome.ranking_diagnostic:
-            typer.echo(f"  ranking={outcome.ranking_diagnostic}")
-        if outcome.failure_summary:
-            typer.echo(f"  failure={outcome.failure_summary}")
+    typer.echo(render_eval_text(report, show_weak_details=show_weak_details))
 
 
 if __name__ == "__main__":

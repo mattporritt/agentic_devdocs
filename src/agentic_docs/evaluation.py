@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+from textwrap import dedent
 
 import yaml
 
@@ -205,15 +206,7 @@ def _window_stats(outcomes: list[EvalOutcome], window: int) -> EvalWindowStats:
     )
 
 
-def run_eval(db_path: Path, eval_file: Path) -> EvalReport:
-    """Run retrieval evaluation over the configured set of queries."""
-
-    cases = load_eval_cases(eval_file)
-    outcomes: list[EvalOutcome] = []
-    for case in cases:
-        results = query_chunks(db_path=db_path, query_text=case.query, top_k=max(case.top_k, 5))
-        outcomes.append(_score_case(case, results))
-
+def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
     total = len(outcomes)
     if total == 0:
         empty_window = EvalWindowStats(
@@ -247,3 +240,83 @@ def run_eval(db_path: Path, eval_file: Path) -> EvalReport:
         top_5=_window_stats(outcomes, 5),
         outcomes=outcomes,
     )
+
+
+def assert_report_consistent(report: EvalReport) -> None:
+    """Fail fast if aggregate report fields diverge from per-query outcomes."""
+
+    recomputed = _build_report(report.outcomes)
+    if report.model_dump() != recomputed.model_dump():
+        msg = "Eval report aggregates diverged from per-query outcomes"
+        raise ValueError(msg)
+
+
+def render_eval_text(report: EvalReport, show_weak_details: bool = False) -> str:
+    """Render human-readable eval output from the canonical report object."""
+
+    assert_report_consistent(report)
+    lines = [
+        f"total_queries: {report.total_queries}",
+        f"strong_passes: {report.strong_passes}",
+        f"weak_passes: {report.weak_passes}",
+        f"misses: {report.misses}",
+        f"top_1_strong_pass_rate: {report.top_1.strong_pass_rate:.3f}",
+        f"top_1_weak_pass_rate: {report.top_1.weak_pass_rate:.3f}",
+        f"top_3_strong_pass_rate: {report.top_3.strong_pass_rate:.3f}",
+        f"top_3_weak_pass_rate: {report.top_3.weak_pass_rate:.3f}",
+        f"top_5_strong_pass_rate: {report.top_5.strong_pass_rate:.3f}",
+        f"top_5_weak_pass_rate: {report.top_5.weak_pass_rate:.3f}",
+        "",
+    ]
+    for outcome in report.outcomes:
+        lines.append(f"{outcome.grade} {outcome.case_id}: {outcome.query}")
+        if outcome.matched_result is not None:
+            lines.append(
+                f"  best_match_rank={outcome.matched_result.rank} path={outcome.matched_result.source_file_path} "
+                f"rule={outcome.matched_result.matched_rule_type} matched_on={', '.join(outcome.matched_result.matched_on)}"
+            )
+        if show_weak_details and outcome.preferred_result_rank is not None:
+            lines.append(
+                f"  preferred_result_rank={outcome.preferred_result_rank} path={outcome.preferred_result_path} "
+                f"heading={outcome.preferred_result_heading}"
+            )
+        if show_weak_details and outcome.ranking_diagnostic:
+            lines.append(f"  ranking={outcome.ranking_diagnostic}")
+        if outcome.failure_summary:
+            lines.append(f"  failure={outcome.failure_summary}")
+    return "\n".join(lines)
+
+
+def render_eval_summary_markdown(report: EvalReport) -> str:
+    """Render a markdown summary from the canonical eval report."""
+
+    assert_report_consistent(report)
+    return dedent(
+        f"""
+        # Eval Summary
+
+        - Total queries: `{report.total_queries}`
+        - Strong passes: `{report.strong_passes}`
+        - Weak passes: `{report.weak_passes}`
+        - Misses: `{report.misses}`
+        - Top-1 strong-pass rate: `{report.top_1.strong_pass_rate:.3f}`
+        - Top-1 weak-pass rate: `{report.top_1.weak_pass_rate:.3f}`
+        - Top-3 strong-pass rate: `{report.top_3.strong_pass_rate:.3f}`
+        - Top-3 weak-pass rate: `{report.top_3.weak_pass_rate:.3f}`
+        - Top-5 strong-pass rate: `{report.top_5.strong_pass_rate:.3f}`
+        - Top-5 weak-pass rate: `{report.top_5.weak_pass_rate:.3f}`
+        """
+    ).strip()
+
+
+def run_eval(db_path: Path, eval_file: Path) -> EvalReport:
+    """Run retrieval evaluation over the configured set of queries."""
+
+    cases = load_eval_cases(eval_file)
+    outcomes: list[EvalOutcome] = []
+    for case in cases:
+        results = query_chunks(db_path=db_path, query_text=case.query, top_k=max(case.top_k, 5))
+        outcomes.append(_score_case(case, results))
+    report = _build_report(outcomes)
+    assert_report_consistent(report)
+    return report

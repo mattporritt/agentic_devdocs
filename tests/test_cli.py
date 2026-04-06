@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -163,3 +164,52 @@ def test_cli_query_explain_ranking_and_eval_weak_details(tmp_path: Path) -> None
     )
     assert eval_result.exit_code == 0
     assert "ranking=" in eval_result.stdout or "preferred_result_rank=" in eval_result.stdout
+
+
+def test_cli_eval_text_and_json_are_consistent(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "admin.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "Use settings.php to add plugin settings.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: admin-settings",
+                "    query: How do I add admin settings for a plugin?",
+                "    preferred_document_paths:",
+                "      - admin.md",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    ingest_result = runner.invoke(
+        app,
+        ["ingest", "--source", str(docs_dir), "--db-path", str(db_path), "--json"],
+    )
+    assert ingest_result.exit_code == 0
+
+    eval_json = runner.invoke(
+        app,
+        ["eval", "--db-path", str(db_path), "--eval-file", str(eval_file), "--json"],
+    )
+    eval_text = runner.invoke(
+        app,
+        ["eval", "--db-path", str(db_path), "--eval-file", str(eval_file)],
+    )
+    assert eval_json.exit_code == 0
+    assert eval_text.exit_code == 0
+
+    payload = json.loads(eval_json.stdout)
+    assert f"total_queries: {payload['total_queries']}" in eval_text.stdout
+    assert f"strong_passes: {payload['strong_passes']}" in eval_text.stdout
+    assert f"weak_passes: {payload['weak_passes']}" in eval_text.stdout
+    assert f"misses: {payload['misses']}" in eval_text.stdout
