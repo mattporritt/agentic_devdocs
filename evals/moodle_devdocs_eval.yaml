@@ -1,5 +1,7 @@
 cases:
-  - id: admin-settings
+  - id: admin-settings-howto
+    concept_id: admin-settings
+    bucket: plugin-structure
     query: "How do I add admin settings for a plugin?"
     description: "Plugin configuration exposed through admin settings and settings.php."
     preferred_document_paths:
@@ -13,7 +15,26 @@ cases:
       - "Admin settings"
       - "settings"
     top_k: 5
-  - id: plugin-upgrade-steps
+
+  - id: admin-settings-file-location
+    concept_id: admin-settings
+    bucket: plugin-structure
+    query: "Where do Moodle plugin admin settings go?"
+    description: "File-location phrasing for plugin settings."
+    preferred_document_paths:
+      - "docs/apis/subsystems/admin/index.md"
+      - "docs/apis/_files/settings-php.mdx"
+    acceptable_document_paths:
+      - "docs/apis.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "settings.php"
+      - "Admin settings"
+    top_k: 5
+
+  - id: plugin-upgrade-steps-howto
+    concept_id: plugin-upgrade-steps
+    bucket: upgrade-install-schema
     query: "How do plugin upgrade steps work in Moodle?"
     description: "Upgrade steps and db/upgrade.php."
     preferred_document_paths:
@@ -28,7 +49,45 @@ cases:
       - "Upgrade helpers"
       - "Upgrade"
     top_k: 5
-  - id: capabilities-access
+
+  - id: plugin-upgrade-steps-location
+    concept_id: plugin-upgrade-steps
+    bucket: upgrade-install-schema
+    query: "Where do Moodle plugin upgrade steps go?"
+    description: "File-location phrasing for plugin upgrade logic."
+    preferred_document_paths:
+      - "docs/guides/upgrade/index.md"
+      - "docs/apis/_files/db-upgrade-php.mdx"
+      - "docs/apis/_files/upgrade-php.mdx"
+    acceptable_document_paths:
+      - "docs/apis/plugintypes/mod/index.mdx"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "upgrade.php"
+      - "Upgrade"
+    top_k: 5
+
+  - id: plugin-upgrade-steps-writing
+    concept_id: plugin-upgrade-steps
+    bucket: upgrade-install-schema
+    query: "How do I write an upgrade step for a plugin?"
+    description: "Implementation phrasing for plugin upgrade steps."
+    preferred_document_paths:
+      - "docs/guides/upgrade/index.md"
+      - "docs/apis/_files/db-upgrade-php.mdx"
+      - "docs/apis/_files/upgrade-php.mdx"
+    acceptable_document_paths:
+      - "docs/apis/plugintypes/mod/index.mdx"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "savepoint"
+      - "upgrade step"
+      - "upgrade.php"
+    top_k: 5
+
+  - id: capabilities-access-howto
+    concept_id: capabilities-access
+    bucket: apis-subsystems
     query: "How do I define capabilities in access.php?"
     description: "Capabilities and db/access.php."
     preferred_document_paths:
@@ -42,7 +101,26 @@ cases:
       - "How to define new capabilities in plugins"
       - "db/access.php"
     top_k: 5
-  - id: scheduled-tasks
+
+  - id: capabilities-access-location
+    concept_id: capabilities-access
+    bucket: apis-subsystems
+    query: "Where are plugin capabilities declared in Moodle?"
+    description: "Less canonical wording for capability declarations."
+    preferred_document_paths:
+      - "docs/apis/subsystems/access.md"
+      - "docs/apis/_files/db-access-php.mdx"
+    acceptable_document_paths:
+      - "docs/apis/commonfiles/index.mdx"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "capabilities"
+      - "db/access.php"
+    top_k: 5
+
+  - id: scheduled-tasks-howto
+    concept_id: scheduled-tasks
+    bucket: upgrade-install-schema
     query: "How do scheduled tasks get registered?"
     description: "Task registration via db/tasks.php."
     preferred_document_paths:
@@ -55,7 +133,26 @@ cases:
       - "scheduled tasks"
       - "db/tasks.php"
     top_k: 5
-  - id: web-services
+
+  - id: scheduled-tasks-location
+    concept_id: scheduled-tasks
+    bucket: upgrade-install-schema
+    query: "What file defines Moodle scheduled tasks for a plugin?"
+    description: "File-location phrasing for scheduled tasks."
+    preferred_document_paths:
+      - "docs/apis/subsystems/task/scheduled.md"
+      - "docs/apis/_files/db-tasks-php.mdx"
+    acceptable_document_paths:
+      - "docs/apis/commonfiles/db-tasks.php/index.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "scheduled tasks"
+      - "db/tasks.php"
+    top_k: 5
+
+  - id: web-services-howto
+    concept_id: web-services
+    bucket: web-services
     query: "How do I define web services for a plugin?"
     description: "Writing a service and db/services.php."
     preferred_document_paths:
@@ -71,7 +168,28 @@ cases:
       - "Writing a new service"
       - "db/services.php"
     top_k: 5
-  - id: forms-validation
+
+  - id: web-services-location
+    concept_id: web-services
+    bucket: web-services
+    query: "Where are Moodle external service functions declared?"
+    description: "Alternate wording for external function declarations."
+    preferred_document_paths:
+      - "docs/apis/subsystems/external/writing-a-service.md"
+      - "docs/apis/_files/db-services-php.mdx"
+    acceptable_document_paths:
+      - "docs/apis/subsystems/external/index.md"
+      - "docs/apis/subsystems/external/functions.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "External functions"
+      - "db/services.php"
+      - "web service"
+    top_k: 5
+
+  - id: forms-validation-howto
+    concept_id: forms-validation
+    bucket: apis-subsystems
     query: "How does the Forms API validation pattern work?"
     description: "Form API guidance and validation examples."
     preferred_document_paths:
@@ -86,7 +204,28 @@ cases:
     disallowed_document_paths:
       - "docs/apis/subsystems/xapi/index.md"
     top_k: 5
-  - id: language-strings
+
+  - id: forms-validation-troubleshooting
+    concept_id: forms-validation
+    bucket: apis-subsystems
+    query: "How do I validate a Moodle form field?"
+    description: "Implementation/troubleshooting phrasing for form validation."
+    preferred_document_paths:
+      - "docs/apis/subsystems/form/index.md"
+    acceptable_document_paths:
+      - "docs/apis/plugintypes/mod/index.mdx"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "addRule"
+      - "validation"
+      - "Forms API"
+    disallowed_document_paths:
+      - "docs/apis/subsystems/xapi/index.md"
+    top_k: 5
+
+  - id: language-strings-howto
+    concept_id: language-strings
+    bucket: strings-localisation
     query: "How do language strings work in plugins?"
     description: "Plugin language strings and lang files."
     preferred_document_paths:
@@ -104,7 +243,44 @@ cases:
     disallowed_document_paths:
       - "docs/guides/javascript/index.md"
     top_k: 5
-  - id: output-renderers
+
+  - id: language-strings-location
+    concept_id: language-strings
+    bucket: strings-localisation
+    query: "Where should I put plugin lang strings?"
+    description: "File-location wording for plugin language strings."
+    preferred_document_paths:
+      - "docs/apis/_files/lang.md"
+    acceptable_document_paths:
+      - "docs/apis/plugintypes/mod/index.mdx"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "lang/en"
+      - "Language files"
+      - "language strings"
+    disallowed_document_paths:
+      - "docs/guides/javascript/index.md"
+    top_k: 5
+
+  - id: language-strings-definition
+    concept_id: language-strings
+    bucket: strings-localisation
+    query: "How do Moodle plugin strings get defined?"
+    description: "Definition phrasing for plugin strings."
+    preferred_document_paths:
+      - "docs/apis/_files/lang.md"
+    acceptable_document_paths:
+      - "docs/apis/plugintypes/mod/index.mdx"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Language string definitions"
+      - "language strings"
+      - "Language files"
+    top_k: 5
+
+  - id: output-renderers-howto
+    concept_id: output-renderers
+    bucket: output-rendering-templates
     query: "How do renderers or output APIs work?"
     description: "Output API and renderers."
     preferred_document_paths:
@@ -118,7 +294,26 @@ cases:
       - "Templates"
       - "renderers"
     top_k: 5
-  - id: mustache-templates
+
+  - id: output-renderers-location
+    concept_id: output-renderers
+    bucket: output-rendering-templates
+    query: "Where are Moodle renderers documented?"
+    description: "Documentation-location phrasing for renderers."
+    preferred_document_paths:
+      - "docs/apis/subsystems/output/index.md"
+    acceptable_document_paths:
+      - "docs/guides/templates/index.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "renderers"
+      - "Output API"
+      - "output"
+    top_k: 5
+
+  - id: mustache-templates-howto
+    concept_id: mustache-templates
+    bucket: output-rendering-templates
     query: "How do Mustache templates fit into Moodle output?"
     description: "Mustache templating guide."
     preferred_document_paths:
@@ -131,7 +326,44 @@ cases:
       - "templates"
       - "Mustache"
     top_k: 5
-  - id: privacy-providers
+
+  - id: mustache-templates-rendering
+    concept_id: mustache-templates
+    bucket: output-rendering-templates
+    query: "How does Moodle rendering use Mustache?"
+    description: "Conceptual rendering phrasing for templates."
+    preferred_document_paths:
+      - "docs/guides/templates/index.md"
+    acceptable_document_paths:
+      - "docs/apis/subsystems/output/index.md"
+      - "docs/apis/plugintypes/format/index.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Templates"
+      - "renderers"
+      - "Mustache"
+    top_k: 5
+
+  - id: mustache-templates-override
+    concept_id: mustache-templates
+    bucket: output-rendering-templates
+    query: "How do I override a Mustache template in Moodle?"
+    description: "Implementation phrasing for template overrides."
+    preferred_document_paths:
+      - "docs/guides/templates/index.md"
+    acceptable_document_paths:
+      - "docs/apis/plugintypes/format/index.md"
+      - "docs/apis/subsystems/output/index.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "templates"
+      - "override"
+      - "Mustache"
+    top_k: 5
+
+  - id: privacy-providers-howto
+    concept_id: privacy-providers
+    bucket: privacy-compliance
     query: "How do privacy providers work for plugins?"
     description: "Privacy API provider guidance."
     preferred_document_paths:
@@ -146,7 +378,28 @@ cases:
     disallowed_document_paths:
       - "docs/apis/plugintypes/ai/provider.md"
     top_k: 5
-  - id: events
+
+  - id: privacy-providers-implementation
+    concept_id: privacy-providers
+    bucket: privacy-compliance
+    query: "What privacy provider does a Moodle plugin need?"
+    description: "Implementation/troubleshooting phrasing for privacy providers."
+    preferred_document_paths:
+      - "docs/apis/subsystems/privacy/index.md"
+    acceptable_document_paths:
+      - "docs/apis/subsystems/privacy/utils.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "metadata provider"
+      - "request provider"
+      - "Privacy API"
+    disallowed_document_paths:
+      - "docs/apis/plugintypes/ai/provider.md"
+    top_k: 5
+
+  - id: events-howto
+    concept_id: events
+    bucket: events-hooks-integration
     query: "How do events work in plugins?"
     description: "Event observers and db/events.php."
     preferred_document_paths:
@@ -164,7 +417,48 @@ cases:
       - "docs/apis/plugintypes/assign/feedback.md"
       - "docs/apis/plugintypes/assign/submission.md"
     top_k: 5
-  - id: phpunit
+
+  - id: events-observe-or-trigger
+    concept_id: events
+    bucket: events-hooks-integration
+    query: "How do I trigger or observe plugin events in Moodle?"
+    description: "Implementation wording for event firing and observing."
+    preferred_document_paths:
+      - "docs/apis/_files/db-events-php.mdx"
+      - "docs/apis/subsystems/events/index.md"
+    acceptable_document_paths:
+      - "docs/apis.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Event observers"
+      - "Events API"
+      - "db/events.php"
+    disallowed_document_paths:
+      - "docs/apis/subsystems/output/inplace.md"
+      - "docs/apis/plugintypes/assign/feedback.md"
+      - "docs/apis/plugintypes/assign/submission.md"
+    top_k: 5
+
+  - id: events-location
+    concept_id: events
+    bucket: events-hooks-integration
+    query: "Where are Moodle events documented for plugins?"
+    description: "Documentation-location wording for events."
+    preferred_document_paths:
+      - "docs/apis/_files/db-events-php.mdx"
+      - "docs/apis/subsystems/events/index.md"
+    acceptable_document_paths:
+      - "docs/apis.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Events API"
+      - "Event observers"
+      - "events"
+    top_k: 5
+
+  - id: phpunit-howto
+    concept_id: phpunit
+    bucket: testing
     query: "How do I write PHPUnit tests in Moodle?"
     description: "PHPUnit testing guide."
     preferred_document_paths:
@@ -178,7 +472,26 @@ cases:
       - "PHPUnit executions"
       - "PHPUnit"
     top_k: 5
-  - id: behat
+
+  - id: phpunit-location
+    concept_id: phpunit
+    bucket: testing
+    query: "Where are PHPUnit tests documented for Moodle plugins?"
+    description: "Documentation-location wording for PHPUnit."
+    preferred_document_paths:
+      - "docs/guides/testing/index.md"
+      - "general/development/tools/phpunit/index.md"
+    acceptable_document_paths:
+      - "general/development/tools/gha.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Writing PHPUnit tests"
+      - "PHPUnit"
+    top_k: 5
+
+  - id: behat-howto
+    concept_id: behat
+    bucket: testing
     query: "How do I write Behat tests in Moodle?"
     description: "Acceptance testing guide."
     preferred_document_paths:
@@ -191,4 +504,21 @@ cases:
       - "Executing behat tests"
       - "Writing acceptance tests"
       - "Behat"
+    top_k: 5
+
+  - id: behat-location
+    concept_id: behat
+    bucket: testing
+    query: "Where do I find Moodle Behat test docs?"
+    description: "Documentation-location wording for Behat."
+    preferred_document_paths:
+      - "general/development/tools/behat/writing.md"
+      - "general/development/tools/behat/index.md"
+    acceptable_document_paths:
+      - "general/development/tools/mdk.md"
+    preferred_heading_substrings: []
+    acceptable_heading_substrings:
+      - "Behat"
+      - "Writing acceptance tests"
+      - "Executing behat tests"
     top_k: 5

@@ -10,6 +10,7 @@ import yaml
 
 from agentic_docs.models import (
     EvalCase,
+    EvalGroupReport,
     EvalMatch,
     EvalOutcome,
     EvalReport,
@@ -166,6 +167,8 @@ def _score_case(case: EvalCase, results: list[QueryResult]) -> EvalOutcome:
     return EvalOutcome(
         case_id=case.id,
         query=case.query,
+        bucket=case.bucket,
+        concept_id=case.concept_id,
         top_k=case.top_k,
         grade=grade,
         strong_pass_top_1=strong_pass_top_1,
@@ -224,12 +227,20 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
             top_1=empty_window,
             top_3=empty_window,
             top_5=empty_window,
+            buckets={},
+            concepts={},
             outcomes=[],
         )
 
     strong_passes = sum(1 for outcome in outcomes if outcome.grade == "STRONG PASS")
     weak_passes = sum(1 for outcome in outcomes if outcome.grade == "WEAK PASS")
     misses = total - strong_passes - weak_passes
+    buckets = _group_reports(outcomes, key_fn=lambda outcome: outcome.bucket)
+    concepts = _group_reports(
+        outcomes,
+        key_fn=lambda outcome: outcome.concept_id,
+        include_empty=False,
+    )
     return EvalReport(
         total_queries=total,
         strong_passes=strong_passes,
@@ -238,8 +249,43 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
         top_1=_window_stats(outcomes, 1),
         top_3=_window_stats(outcomes, 3),
         top_5=_window_stats(outcomes, 5),
+        buckets=buckets,
+        concepts=concepts,
         outcomes=outcomes,
     )
+
+
+def _group_reports(
+    outcomes: list[EvalOutcome],
+    key_fn,
+    include_empty: bool = True,
+) -> dict[str, EvalGroupReport]:
+    grouped: dict[str, list[EvalOutcome]] = {}
+    for outcome in outcomes:
+        label = key_fn(outcome)
+        if label is None and not include_empty:
+            continue
+        group_key = str(label or "uncategorized")
+        grouped.setdefault(group_key, []).append(outcome)
+
+    reports: dict[str, EvalGroupReport] = {}
+    for label, group_outcomes in sorted(grouped.items()):
+        total = len(group_outcomes)
+        strong_passes = sum(1 for outcome in group_outcomes if outcome.grade == "STRONG PASS")
+        weak_passes = sum(1 for outcome in group_outcomes if outcome.grade == "WEAK PASS")
+        misses = total - strong_passes - weak_passes
+        reports[label] = EvalGroupReport(
+            label=label,
+            total_queries=total,
+            strong_passes=strong_passes,
+            weak_passes=weak_passes,
+            misses=misses,
+            top_1=_window_stats(group_outcomes, 1),
+            top_3=_window_stats(group_outcomes, 3),
+            top_5=_window_stats(group_outcomes, 5),
+            case_ids=[outcome.case_id for outcome in group_outcomes],
+        )
+    return reports
 
 
 def assert_report_consistent(report: EvalReport) -> None:
@@ -268,8 +314,25 @@ def render_eval_text(report: EvalReport, show_weak_details: bool = False) -> str
         f"top_5_weak_pass_rate: {report.top_5.weak_pass_rate:.3f}",
         "",
     ]
+    if report.buckets:
+        lines.append("bucket_summary:")
+        for bucket, bucket_report in report.buckets.items():
+            lines.append(
+                f"  {bucket}: strong={bucket_report.strong_passes} weak={bucket_report.weak_passes} "
+                f"miss={bucket_report.misses} top_1_strong={bucket_report.top_1.strong_pass_rate:.3f}"
+            )
+        lines.append("")
+    if report.concepts:
+        lines.append("concept_summary:")
+        for concept, concept_report in report.concepts.items():
+            lines.append(
+                f"  {concept}: strong={concept_report.strong_passes} weak={concept_report.weak_passes} "
+                f"miss={concept_report.misses} top_1_strong={concept_report.top_1.strong_pass_rate:.3f}"
+            )
+        lines.append("")
     for outcome in report.outcomes:
         lines.append(f"{outcome.grade} {outcome.case_id}: {outcome.query}")
+        lines.append(f"  bucket={outcome.bucket} concept={outcome.concept_id or outcome.case_id}")
         if outcome.matched_result is not None:
             lines.append(
                 f"  best_match_rank={outcome.matched_result.rank} path={outcome.matched_result.source_file_path} "
@@ -291,7 +354,7 @@ def render_eval_summary_markdown(report: EvalReport) -> str:
     """Render a markdown summary from the canonical eval report."""
 
     assert_report_consistent(report)
-    return dedent(
+    summary = dedent(
         f"""
         # Eval Summary
 
@@ -307,6 +370,23 @@ def render_eval_summary_markdown(report: EvalReport) -> str:
         - Top-5 weak-pass rate: `{report.top_5.weak_pass_rate:.3f}`
         """
     ).strip()
+
+    if report.buckets:
+        lines = [summary, "", "## Buckets", ""]
+        for bucket, bucket_report in report.buckets.items():
+            lines.append(
+                f"- Bucket `{bucket}`: `{bucket_report.strong_passes}` strong / `{bucket_report.weak_passes}` weak / "
+                f"`{bucket_report.misses}` miss, top-1 strong `{bucket_report.top_1.strong_pass_rate:.3f}`"
+            )
+        if report.concepts:
+            lines.extend(["", "## Concepts", ""])
+            for concept, concept_report in report.concepts.items():
+                lines.append(
+                    f"- Concept `{concept}`: `{concept_report.strong_passes}` strong / `{concept_report.weak_passes}` weak / "
+                    f"`{concept_report.misses}` miss across `{concept_report.total_queries}` queries"
+                )
+        return "\n".join(lines)
+    return summary
 
 
 def run_eval(db_path: Path, eval_file: Path) -> EvalReport:

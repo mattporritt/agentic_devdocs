@@ -116,6 +116,8 @@ class EvalCase(BaseModel):
 
     id: str
     query: str
+    bucket: str = "uncategorized"
+    concept_id: str | None = None
     description: str | None = None
     preferred_document_paths: list[str] = Field(default_factory=list)
     acceptable_document_paths: list[str] = Field(default_factory=list)
@@ -157,6 +159,8 @@ class EvalOutcome(BaseModel):
 
     case_id: str
     query: str
+    bucket: str
+    concept_id: str | None = None
     top_k: int
     grade: str
     strong_pass_top_1: bool
@@ -187,4 +191,20 @@ class EvalReport(BaseModel):
     top_1: EvalWindowStats
     top_3: EvalWindowStats
     top_5: EvalWindowStats
+    buckets: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
+    concepts: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
     outcomes: list[EvalOutcome]
+
+
+class EvalGroupReport(BaseModel):
+    """Aggregate retrieval report for a bucket or concept group."""
+
+    label: str
+    total_queries: int
+    strong_passes: int
+    weak_passes: int
+    misses: int
+    top_1: EvalWindowStats
+    top_3: EvalWindowStats
+    top_5: EvalWindowStats
+    case_ids: list[str] = Field(default_factory=list)

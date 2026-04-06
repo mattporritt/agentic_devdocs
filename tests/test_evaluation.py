@@ -23,6 +23,8 @@ def test_load_eval_cases_from_yaml(tmp_path: Path) -> None:
             [
                 "cases:",
                 "  - id: settings",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
                 "    query: How do I add admin settings?",
                 "    preferred_document_paths:",
                 "      - docs/apis/subsystems/admin/index.md",
@@ -39,6 +41,8 @@ def test_load_eval_cases_from_yaml(tmp_path: Path) -> None:
 
     assert len(cases) == 1
     assert cases[0].id == "settings"
+    assert cases[0].bucket == "plugin-structure"
+    assert cases[0].concept_id == "admin-settings"
     assert cases[0].preferred_heading_substrings == ["Admin settings"]
     assert cases[0].acceptable_document_paths == ["docs/apis.md"]
 
@@ -62,6 +66,8 @@ def test_run_eval_scores_hits(tmp_path: Path) -> None:
             [
                 "cases:",
                 "  - id: admin-settings",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
                 "    query: How do I add admin settings for a plugin?",
                 "    preferred_document_paths:",
                 "      - apis/subsystems/admin/index.md",
@@ -78,6 +84,8 @@ def test_run_eval_scores_hits(tmp_path: Path) -> None:
     assert report.top_1.strong_pass_rate == 1.0
     assert report.outcomes[0].grade == "STRONG PASS"
     assert report.outcomes[0].matched_result is not None
+    assert report.buckets["plugin-structure"].strong_passes == 1
+    assert report.concepts["admin-settings"].strong_passes == 1
 
 
 def test_run_eval_matches_direct_query_path_for_forms_validation(tmp_path: Path) -> None:
@@ -99,6 +107,8 @@ def test_run_eval_matches_direct_query_path_for_forms_validation(tmp_path: Path)
             [
                 "cases:",
                 "  - id: forms-validation",
+                "    bucket: apis-subsystems",
+                "    concept_id: forms-validation",
                 "    query: How does the Forms API validation pattern work?",
                 "    preferred_document_paths:",
                 "      - apis/subsystems/form/index.md",
@@ -116,6 +126,8 @@ def test_run_eval_matches_direct_query_path_for_forms_validation(tmp_path: Path)
     assert direct_results[0].source_file_path == "apis/subsystems/form/index.md"
     assert report.outcomes[0].grade == "STRONG PASS"
     assert report.outcomes[0].matched_result_path == direct_results[0].source_file_path
+    assert report.outcomes[0].bucket == "apis-subsystems"
+    assert report.outcomes[0].concept_id == "forms-validation"
 
 
 def test_run_eval_distinguishes_weak_pass(tmp_path: Path) -> None:
@@ -137,6 +149,8 @@ def test_run_eval_distinguishes_weak_pass(tmp_path: Path) -> None:
             [
                 "cases:",
                 "  - id: admin-settings",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
                 "    query: How do I add admin settings for a plugin?",
                 "    preferred_document_paths:",
                 "      - apis/subsystems/admin/index.md",
@@ -178,6 +192,8 @@ def test_run_eval_reports_preferred_result_rank_for_weak_pass(tmp_path: Path) ->
             [
                 "cases:",
                 "  - id: events",
+                "    bucket: events-hooks-integration",
+                "    concept_id: events",
                 "    query: How do events work in plugins?",
                 "    preferred_document_paths:",
                 "      - events.md",
@@ -233,6 +249,8 @@ def test_eval_renderers_share_single_source_of_truth(tmp_path: Path) -> None:
             [
                 "cases:",
                 "  - id: admin-settings",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
                 "    query: How do I add admin settings for a plugin?",
                 "    preferred_document_paths:",
                 "      - admin.md",
@@ -265,6 +283,10 @@ def test_eval_renderers_share_single_source_of_truth(tmp_path: Path) -> None:
     assert summary_fields["Top-5 strong-pass rate"] == f"{json_payload['top_5']['strong_pass_rate']:.3f}"
     assert summary_fields["Top-5 weak-pass rate"] == f"{json_payload['top_5']['weak_pass_rate']:.3f}"
     assert json.loads(json.dumps(json_payload))["strong_passes"] == json_payload["strong_passes"]
+    assert "plugin-structure" in json_payload["buckets"]
+    assert "admin-settings" in json_payload["concepts"]
+    assert "Bucket `plugin-structure`" in summary_output
+    assert "Concept `admin-settings`" in summary_output
 
 
 def test_assert_report_consistent_fails_on_divergent_aggregates(tmp_path: Path) -> None:
@@ -286,6 +308,8 @@ def test_assert_report_consistent_fails_on_divergent_aggregates(tmp_path: Path) 
             [
                 "cases:",
                 "  - id: admin-settings",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
                 "    query: How do I add admin settings for a plugin?",
                 "    preferred_document_paths:",
                 "      - admin.md",
@@ -299,3 +323,63 @@ def test_assert_report_consistent_fails_on_divergent_aggregates(tmp_path: Path) 
 
     with pytest.raises(ValueError, match="diverged"):
         assert_report_consistent(tampered)
+
+
+def test_bucket_and_concept_aggregates_remain_consistent(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "admin.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "Use settings.php to add plugin admin settings.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "events.md").write_text(
+        "# Events API\n\n## Event observers\n\nRegister plugin observers in db/events.php.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=120, overlap_tokens=10)
+
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: admin-settings-a",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
+                "    query: How do I add admin settings for a plugin?",
+                "    preferred_document_paths:",
+                "      - admin.md",
+                "  - id: admin-settings-b",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
+                "    query: Where do Moodle plugin admin settings go?",
+                "    preferred_document_paths:",
+                "      - admin.md",
+                "  - id: events-a",
+                "    bucket: events-hooks-integration",
+                "    concept_id: events",
+                "    query: How do events work in plugins?",
+                "    preferred_document_paths:",
+                "      - events.md",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_eval(db_path=db_path, eval_file=eval_file)
+
+    assert report.total_queries == 3
+    assert report.buckets["plugin-structure"].total_queries == 2
+    assert report.buckets["events-hooks-integration"].total_queries == 1
+    assert report.concepts["admin-settings"].total_queries == 2
+    assert report.concepts["events"].total_queries == 1
+    assert (
+        report.buckets["plugin-structure"].strong_passes
+        + report.buckets["plugin-structure"].weak_passes
+        + report.buckets["plugin-structure"].misses
+        == report.buckets["plugin-structure"].total_queries
+    )

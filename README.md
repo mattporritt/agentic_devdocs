@@ -397,11 +397,21 @@ It is meant to answer practical questions during tuning:
 - is lexical retrieval good enough for now?
 - which misses point to chunking, indexing, query handling, or packaging problems?
 
-The starter eval file lives at [evals/moodle_devdocs_eval.yaml](/Users/mattp/projects/agentic_devdocs/evals/moodle_devdocs_eval.yaml) and uses explicit grading targets:
+The eval file lives at [evals/moodle_devdocs_eval.yaml](/Users/mattp/projects/agentic_devdocs/evals/moodle_devdocs_eval.yaml) and now aims to be broader than the original narrow benchmark. It mixes:
+
+- conceptual phrasing
+- implementation phrasing
+- file-location phrasing
+- troubleshooting-style phrasing
+- multiple phrasings for the same underlying Moodle development concept
+
+Each case still uses explicit grading targets:
 
 - `preferred_document_paths` and `preferred_heading_substrings` for strong passes
 - `acceptable_document_paths` and `acceptable_heading_substrings` for weak passes
 - `disallowed_document_paths` for obviously wrong-but-lexically-close results
+- `bucket` to group related areas such as testing, privacy, output/rendering, or upgrade/schema work
+- `concept_id` to group multiple query phrasings for the same underlying task
 
 It covers representative questions such as:
 
@@ -429,6 +439,8 @@ The report exposes:
 - strong-pass counts and rates
 - weak-pass counts and rates
 - misses
+- bucket-level breakdowns
+- concept-level breakdowns across related phrasings
 - matched rule type and matched result rank per query
 - preferred-result rank when a better target was retrieved but ranked too low
 - concise ranking diagnostics for weak passes and ranking misses
@@ -439,7 +451,10 @@ This keeps failures understandable and easy to tune against.
 
 One regression investigation found that validation artifacts could look red even when retrieval itself was healthy if ingest and eval were run in parallel against the same SQLite database. The recommended workflow is now to use `verify-devdocs --eval-file ...`, which performs ingest, smoke queries, stats, and eval sequentially on the same DB snapshot.
 
-It is normal and acceptable for stricter grading to reduce headline scores. Lower but more truthful scores are more useful for retrieval tuning than permissive scores that count loose lexical overlap as success.
+It is normal and acceptable for a broader benchmark to reduce headline scores. A perfect score on a small hand-tuned set is not enough; the more useful signal is whether retrieval remains strong across realistic wording variation and whether weak spots cluster in a meaningful bucket or concept group.
+
+Bucket results help answer where retrieval is weakest.
+Concept results help answer whether retrieval is brittle to alternate phrasings of the same task.
 
 ## Context Bundles
 
