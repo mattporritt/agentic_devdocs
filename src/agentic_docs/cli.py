@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Annotated
 
@@ -10,7 +11,7 @@ import typer
 
 from agentic_docs.config import IngestConfig, QueryConfig
 from agentic_docs.evaluation import render_eval_text, run_eval
-from agentic_docs.git_sync import current_commit_hash, sync_repository
+from agentic_docs.git_sync import current_commit_hash, git_head_commit, git_working_tree_status, sync_repository
 from agentic_docs.ingest import ingest_source
 from agentic_docs.query_service import build_context_bundles, query_chunks
 from agentic_docs.storage import SQLiteStore
@@ -27,6 +28,31 @@ def _emit(data: object, as_json: bool) -> None:
             typer.echo(f"{key}: {value}")
         return
     typer.echo(str(data))
+
+
+def _validation_worktree_payload(repo_path: Path, allow_dirty: bool) -> dict[str, object]:
+    """Validate and describe the current project worktree for trustworthy validation runs."""
+
+    status = git_working_tree_status(repo_path)
+    if status["is_git_repo"] is False:
+        mode = "not_git_repo"
+    elif status["clean"] is False and allow_dirty:
+        mode = "dirty_override"
+    else:
+        mode = "clean"
+    payload = {
+        "repo_path": str(repo_path),
+        "repo_head_commit": git_head_commit(repo_path),
+        "is_git_repo": status["is_git_repo"],
+        "clean": status["clean"],
+        "allow_dirty": allow_dirty,
+        "status_lines": status["status_lines"],
+        "mode": mode,
+    }
+    if status["is_git_repo"] and status["clean"] is False and not allow_dirty:
+        message = "Validation requires a clean git working tree. Commit or stash changes, or pass --allow-dirty."
+        raise typer.BadParameter(message)
+    return payload
 
 
 @app.command()
@@ -208,14 +234,18 @@ def verify_devdocs(
     repo_url: Annotated[str, typer.Option(help="Git repository URL to sync.")] = "https://github.com/moodle/devdocs/",
     local_path: Annotated[Path, typer.Option(help="Local path for the cloned repository.")] = Path("./_smoke_test/devdocs"),
     db_path: Annotated[Path, typer.Option(help="SQLite database path.")] = Path("./_smoke_test/agentic-docs.db"),
+    eval_file: Annotated[Path | None, typer.Option(help="Optional eval YAML/JSON to run after ingest for a single-source-of-truth validation payload.")] = None,
     tokenizer: Annotated[str, typer.Option(help="Tokenizer adapter to use.")] = "openai",
     max_tokens: Annotated[int, typer.Option(help="Maximum tokens per chunk.")] = 400,
     overlap_tokens: Annotated[int, typer.Option(help="Overlap tokens between adjacent chunks.")] = 60,
     skip_sync: Annotated[bool, typer.Option(help="Use the existing local checkout without attempting a network sync.")] = False,
+    allow_dirty: Annotated[bool, typer.Option(help="Allow validation to run from a dirty git working tree.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Run a repeatable sync, ingest, stats, and smoke-query workflow for Moodle devdocs."""
 
+    workspace_path = Path(os.getcwd())
+    working_tree = _validation_worktree_payload(workspace_path, allow_dirty=allow_dirty)
     repo_commit_hash = sync_repository(repo_url=repo_url, local_path=local_path) if not skip_sync else current_commit_hash(local_path)
     ingest_result = ingest_source(
         source=local_path,
@@ -233,14 +263,18 @@ def verify_devdocs(
         query_text: [result.model_dump() for result in query_chunks(db_path=db_path, query_text=query_text, top_k=3)]
         for query_text in smoke_queries
     }
+    eval_report = run_eval(db_path=db_path, eval_file=eval_file) if eval_file is not None else None
     payload = {
         "repo_url": repo_url,
         "local_path": str(local_path),
         "db_path": str(db_path),
+        "working_tree": working_tree,
         "repo_commit_hash": repo_commit_hash,
         "ingest": ingest_result,
         "stats": SQLiteStore(db_path).detailed_stats(limit=5),
         "smoke_queries": smoke_results,
+        "eval": eval_report.model_dump() if eval_report is not None else None,
+        "regression_detected": (eval_report.misses > 0 or eval_report.weak_passes > 0) if eval_report is not None else None,
     }
     _emit(payload, json_output)
 

@@ -13,6 +13,7 @@ from agentic_docs.evaluation import (
     run_eval,
 )
 from agentic_docs.ingest import ingest_source
+from agentic_docs.query_service import query_chunks
 
 
 def test_load_eval_cases_from_yaml(tmp_path: Path) -> None:
@@ -77,6 +78,44 @@ def test_run_eval_scores_hits(tmp_path: Path) -> None:
     assert report.top_1.strong_pass_rate == 1.0
     assert report.outcomes[0].grade == "STRONG PASS"
     assert report.outcomes[0].matched_result is not None
+
+
+def test_run_eval_matches_direct_query_path_for_forms_validation(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "form").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "form" / "index.md").write_text(
+        "---\n"
+        "title: Forms API\n"
+        "---\n\n"
+        "## Forms API\n\nUse addRule() and validation helpers in the Forms API.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=120, overlap_tokens=10)
+
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: forms-validation",
+                "    query: How does the Forms API validation pattern work?",
+                "    preferred_document_paths:",
+                "      - apis/subsystems/form/index.md",
+                "    acceptable_heading_substrings:",
+                "      - Forms API",
+                "      - addRule",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    direct_results = query_chunks(db_path=db_path, query_text="How does the Forms API validation pattern work?", top_k=5)
+    report = run_eval(db_path=db_path, eval_file=eval_file)
+
+    assert direct_results[0].source_file_path == "apis/subsystems/form/index.md"
+    assert report.outcomes[0].grade == "STRONG PASS"
+    assert report.outcomes[0].matched_result_path == direct_results[0].source_file_path
 
 
 def test_run_eval_distinguishes_weak_pass(tmp_path: Path) -> None:

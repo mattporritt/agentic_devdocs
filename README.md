@@ -104,6 +104,7 @@ agentic-docs verify-devdocs \
   --repo-url https://github.com/moodle/devdocs/ \
   --local-path ./_smoke_test/devdocs \
   --db-path ./_smoke_test/agentic-docs.db \
+  --eval-file ./evals/moodle_devdocs_eval.yaml \
   --tokenizer openai \
   --max-tokens 400 \
   --overlap-tokens 60
@@ -115,6 +116,15 @@ This command:
 - ingests the docs into SQLite
 - prints stats and diagnostic summaries
 - runs a few smoke-test queries
+- optionally runs the strict eval sequentially on the same freshly ingested DB when `--eval-file` is provided
+
+Validation now checks the current project git worktree before running:
+
+- clean worktrees are accepted normally
+- dirty worktrees fail fast by default
+- `--allow-dirty` records that the run was forced from a dirty tree
+
+This guard exists because validation artifacts are only trustworthy when they can be traced to a specific committed tool state.
 
 The current public Moodle devdocs repo contains markdown and MDX content across directories such as `docs/`, `versioned_docs/`, and `general/`, and the current ingestion path is intentionally broad enough to cover that real structure.
 
@@ -279,8 +289,14 @@ Run the repeatable public Moodle devdocs verification workflow.
 agentic-docs verify-devdocs \
   --repo-url https://github.com/moodle/devdocs/ \
   --local-path ./_smoke_test/devdocs \
-  --db-path ./_smoke_test/agentic-docs.db
+  --db-path ./_smoke_test/agentic-docs.db \
+  --eval-file ./evals/moodle_devdocs_eval.yaml
 ```
+
+Useful flags:
+
+- `--eval-file`: run the strict eval as part of the same sequential validation workflow
+- `--allow-dirty`: override the clean-worktree requirement, while recording that the run came from a dirty tree
 
 ### `eval`
 
@@ -420,6 +436,8 @@ The report exposes:
 This keeps failures understandable and easy to tune against.
 
 `eval.json` is the canonical source of truth for a run. The plain-text eval output and any markdown summary should be rendered from the same in-memory `EvalReport`, and the code now performs an internal consistency check to fail fast if aggregate counts or rates ever diverge from the per-query outcomes.
+
+One regression investigation found that validation artifacts could look red even when retrieval itself was healthy if ingest and eval were run in parallel against the same SQLite database. The recommended workflow is now to use `verify-devdocs --eval-file ...`, which performs ingest, smoke queries, stats, and eval sequentially on the same DB snapshot.
 
 It is normal and acceptable for stricter grading to reduce headline scores. Lower but more truthful scores are more useful for retrieval tuning than permissive scores that count loose lexical overlap as success.
 

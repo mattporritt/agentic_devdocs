@@ -29,6 +29,31 @@ def current_commit_hash(repo_path: Path) -> str | None:
         return None
 
 
+def git_head_commit(repo_path: Path) -> str | None:
+    """Return the current HEAD commit for a git worktree."""
+
+    try:
+        return _run_git(["-C", str(repo_path), "rev-parse", "HEAD"]).strip()
+    except RuntimeError:
+        return None
+
+
+def git_working_tree_status(repo_path: Path) -> dict[str, object]:
+    """Return whether the git worktree is clean plus the raw porcelain lines."""
+
+    try:
+        output = _run_git(["-C", str(repo_path), "status", "--porcelain"])
+    except RuntimeError:
+        return {"is_git_repo": False, "clean": None, "status_lines": []}
+
+    status_lines = [line for line in output.splitlines() if line.strip()]
+    return {
+        "is_git_repo": True,
+        "clean": not status_lines,
+        "status_lines": status_lines,
+    }
+
+
 def _run_git(args: list[str]) -> str:
     completed = subprocess.run(
         ["git", *args],
@@ -41,4 +66,3 @@ def _run_git(args: list[str]) -> str:
         msg = f"git command failed: {' '.join(args)}\n{stderr}"
         raise RuntimeError(msg)
     return completed.stdout
-

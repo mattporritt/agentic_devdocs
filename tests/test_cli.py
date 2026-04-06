@@ -1,9 +1,10 @@
 import json
 from pathlib import Path
 
+import pytest
 from typer.testing import CliRunner
 
-from agentic_docs.cli import app
+from agentic_docs.cli import _validation_worktree_payload, app
 
 
 runner = CliRunner()
@@ -213,3 +214,100 @@ def test_cli_eval_text_and_json_are_consistent(tmp_path: Path) -> None:
     assert f"strong_passes: {payload['strong_passes']}" in eval_text.stdout
     assert f"weak_passes: {payload['weak_passes']}" in eval_text.stdout
     assert f"misses: {payload['misses']}" in eval_text.stdout
+
+
+def test_validation_worktree_payload_rejects_dirty_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "agentic_docs.cli.git_working_tree_status",
+        lambda _path: {"is_git_repo": True, "clean": False, "status_lines": [" M README.md"]},
+    )
+    monkeypatch.setattr("agentic_docs.cli.git_head_commit", lambda _path: "abc123")
+
+    with pytest.raises(Exception, match="clean git working tree"):
+        _validation_worktree_payload(tmp_path, allow_dirty=False)
+
+
+def test_validation_worktree_payload_allows_dirty_override(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    monkeypatch.setattr(
+        "agentic_docs.cli.git_working_tree_status",
+        lambda _path: {"is_git_repo": True, "clean": False, "status_lines": [" M README.md"]},
+    )
+    monkeypatch.setattr("agentic_docs.cli.git_head_commit", lambda _path: "abc123")
+
+    payload = _validation_worktree_payload(tmp_path, allow_dirty=True)
+
+    assert payload["clean"] is False
+    assert payload["mode"] == "dirty_override"
+    assert payload["status_lines"] == [" M README.md"]
+
+
+def test_cli_verify_devdocs_runs_eval_sequentially_and_records_cleanliness(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "form").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "form" / "index.md").write_text(
+        "---\n"
+        "title: Forms API\n"
+        "---\n\n"
+        "## Forms API\n\nUse the Forms API and addRule() validation helpers.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: forms-validation",
+                "    query: How does the Forms API validation pattern work?",
+                "    preferred_document_paths:",
+                "      - apis/subsystems/form/index.md",
+                "    acceptable_heading_substrings:",
+                "      - Forms API",
+                "      - addRule",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    monkeypatch.setattr(
+        "agentic_docs.cli._validation_worktree_payload",
+        lambda _path, allow_dirty: {
+            "repo_path": str(tmp_path),
+            "repo_head_commit": "tool-commit",
+            "is_git_repo": True,
+            "clean": True,
+            "allow_dirty": allow_dirty,
+            "status_lines": [],
+            "mode": "clean",
+        },
+    )
+    monkeypatch.setattr("agentic_docs.cli.current_commit_hash", lambda _path: "devdocs-commit")
+
+    result = runner.invoke(
+        app,
+        [
+            "verify-devdocs",
+            "--local-path",
+            str(docs_dir),
+            "--db-path",
+            str(db_path),
+            "--eval-file",
+            str(eval_file),
+            "--skip-sync",
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["working_tree"]["clean"] is True
+    assert payload["working_tree"]["mode"] == "clean"
+    assert payload["repo_commit_hash"] == "devdocs-commit"
+    assert payload["smoke_queries"]["Forms API validation"][0]["source_file_path"] == "apis/subsystems/form/index.md"
+    assert payload["eval"]["strong_passes"] == 1
+    assert payload["eval"]["misses"] == 0
+    assert payload["eval"]["outcomes"][0]["case_id"] == "forms-validation"
+    assert payload["eval"]["outcomes"][0]["grade"] == "STRONG PASS"
+    assert payload["regression_detected"] is False
