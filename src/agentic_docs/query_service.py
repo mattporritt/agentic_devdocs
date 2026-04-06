@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import dataclass
 import re
 from pathlib import Path
 
@@ -48,6 +49,19 @@ TOKEN_ALIASES = {
 }
 HEADING_PREFIX_PATTERN = re.compile(r"^Heading:\s.*?(?:\n\n|\n)", re.DOTALL)
 GENERIC_PATH_SUFFIXES = {"docs/apis.md", "index.md"}
+CONCEPTUAL_QUERY_PATTERN = re.compile(
+    r"\b(how do|how does|what is|what are|define|write|add|register|work|works)\b"
+)
+
+
+@dataclass(frozen=True, slots=True)
+class QueryProfile:
+    raw_query: str
+    normalized_query: str
+    tokens: list[str]
+    expanded_tokens: list[str]
+    intent: str
+    concept_families: list[str]
 
 
 def canonical_path_key(path: str) -> str:
@@ -81,6 +95,17 @@ def normalize_query_text(query_text: str) -> tuple[str, list[str]]:
     return normalized, tokens
 
 
+def classify_query_intent(query_text: str, tokens: list[str]) -> str:
+    """Classify the query into a small explicit intent set for reranking."""
+
+    lowered = query_text.lower()
+    if CONCEPTUAL_QUERY_PATTERN.search(lowered):
+        return "conceptual"
+    if any(token in {"api", "guide", "docs", "documentation"} for token in tokens):
+        return "conceptual"
+    return "keyword"
+
+
 def _expanded_tokens(tokens: list[str]) -> list[str]:
     expanded: list[str] = []
     for token in tokens:
@@ -94,6 +119,35 @@ def _expanded_tokens(tokens: list[str]) -> list[str]:
             if alias not in expanded:
                 expanded.append(alias)
     return expanded
+
+
+def _concept_families(tokens: list[str]) -> list[str]:
+    expanded = set(_expanded_tokens(tokens))
+    families: list[str] = []
+    if "upgrade" in expanded or "upgrade.php" in expanded:
+        families.append("upgrade")
+    if {"language", "lang"} & expanded and {"strings", "string"} & expanded:
+        families.append("language_strings")
+    if {"mustache", "template", "templates", "output", "renderer", "renderers"} & expanded:
+        families.append("output_templates")
+    if {"events", "event"} & expanded:
+        families.append("events")
+    return families
+
+
+def build_query_profile(query_text: str) -> QueryProfile:
+    """Build a reusable query profile for reranking and diagnostics."""
+
+    normalized_query, tokens = normalize_query_text(query_text)
+    expanded_tokens = _expanded_tokens(tokens)
+    return QueryProfile(
+        raw_query=query_text,
+        normalized_query=normalized_query,
+        tokens=tokens,
+        expanded_tokens=expanded_tokens,
+        intent=classify_query_intent(query_text, tokens),
+        concept_families=_concept_families(tokens),
+    )
 
 
 def _build_fts_queries(query_text: str) -> list[str]:
@@ -166,6 +220,86 @@ def _subsystem_bonus(result: QueryResult, tokens: list[str]) -> float:
     return 2.0
 
 
+def _concept_page_bonus(result: QueryResult, profile: QueryProfile) -> float:
+    if profile.intent != "conceptual":
+        return 0.0
+
+    path = result.source_file_path.lower()
+    if any(segment in path for segment in ("/subsystems/", "/guides/", "/_files/", "/commonfiles/")):
+        return 5.0
+    if path == "docs/apis.md":
+        return 2.0
+    return 0.0
+
+
+def _plugin_type_penalty(result: QueryResult, profile: QueryProfile) -> float:
+    if profile.intent != "conceptual":
+        return 0.0
+
+    path = result.source_file_path.lower()
+    if "/plugintypes/" in path and "/_files/" not in path:
+        return -6.0
+    return 0.0
+
+
+def _family_specific_bonus(result: QueryResult, profile: QueryProfile) -> float:
+    if not profile.concept_families:
+        return 0.0
+
+    path = result.source_file_path.lower()
+    title = result.document_title.lower()
+    heading = " > ".join(result.heading_path).lower()
+    bonus = 0.0
+
+    if "upgrade" in profile.concept_families:
+        if any(fragment in path for fragment in ("/guides/upgrade/", "/_files/db-upgrade", "/_files/upgrade-php")):
+            bonus += 14.0
+        if "upgrade helpers" in heading or "upgrade.php" in heading:
+            bonus += 4.0
+        if "/plugintypes/" in path:
+            bonus -= 8.0
+
+    if "language_strings" in profile.concept_families:
+        if path.endswith("docs/apis/_files/lang.md") or "/_files/lang.md" in path:
+            bonus += 12.0
+        if "language files" in heading or "language files" in title:
+            bonus += 4.0
+        if "/plugintypes/" in path:
+            bonus -= 5.0
+
+    if "output_templates" in profile.concept_families:
+        if "/guides/templates/" in path:
+            bonus += 18.0
+        elif "/subsystems/output/" in path:
+            bonus += 10.0
+        if title == "templates":
+            bonus += 6.0
+        elif title == "output api":
+            bonus += 2.0
+        if "templates" in heading or "mustache" in heading:
+            bonus += 6.0
+        elif "renderers" in heading:
+            bonus += 4.0
+        elif "renderable" in heading:
+            bonus += 4.0
+        if "/plugintypes/format/" in path:
+            bonus -= 8.0
+
+    if "events" in profile.concept_families:
+        if any(fragment in path for fragment in ("/subsystems/events/", "/_files/db-events")):
+            bonus += 18.0
+        if "events api" in heading or "events api" in title:
+            bonus += 6.0
+        if path == "docs/apis.md":
+            bonus += 1.0
+        if "/_files/db-events" in path and any(token in profile.expanded_tokens for token in ("plugin", "plugins")):
+            bonus += 4.0
+        if any(fragment in path for fragment in ("/plugintypes/", "/calendar/", "/xapi/")):
+            bonus -= 8.0
+
+    return bonus
+
+
 def _example_penalty(result: QueryResult) -> float:
     path = result.source_file_path.lower()
     heading = " > ".join(result.heading_path).lower()
@@ -192,9 +326,9 @@ def _generic_chunk_penalty(result: QueryResult, heading_overlap: int, title_over
     return 0.0
 
 
-def _score_result(result: QueryResult, tokens: list[str], normalized_query: str) -> tuple[float, dict[str, float | int | str | list[str]]]:
-    expanded_tokens = _expanded_tokens(tokens)
-    phrases = _query_phrases(tokens)
+def _score_result(result: QueryResult, profile: QueryProfile) -> tuple[float, dict[str, float | int | str | list[str]]]:
+    expanded_tokens = profile.expanded_tokens
+    phrases = _query_phrases(profile.tokens)
     title_text = result.document_title.lower()
     section_text = (result.section_title or "").lower()
     heading_text = " > ".join(result.heading_path).lower()
@@ -210,10 +344,13 @@ def _score_result(result: QueryResult, tokens: list[str], normalized_query: str)
     heading_phrase_hits = _field_overlap(heading_text, phrases)
     path_phrase_hits = _field_overlap(path_text, phrases)
     content_context_hits = _context_hits(result, expanded_tokens)
-    exact_heading = _near_exact_match(" ".join(result.heading_path), normalized_query)
-    exact_title = _near_exact_match(result.document_title, normalized_query)
+    exact_heading = _near_exact_match(" ".join(result.heading_path), profile.normalized_query)
+    exact_title = _near_exact_match(result.document_title, profile.normalized_query)
     canonical_bonus = 2.0 if is_canonical_path(result.source_file_path) else -1.5
     subsystem_bonus = _subsystem_bonus(result, expanded_tokens)
+    concept_page_bonus = _concept_page_bonus(result, profile)
+    plugin_type_penalty = _plugin_type_penalty(result, profile)
+    family_specific_bonus = _family_specific_bonus(result, profile)
     example_penalty = _example_penalty(result)
     quality_adjustment = _chunk_quality_adjustment(result)
     generic_penalty = _generic_chunk_penalty(result, heading_overlap, title_overlap, path_overlap)
@@ -233,6 +370,9 @@ def _score_result(result: QueryResult, tokens: list[str], normalized_query: str)
         + (5.0 if exact_title else 0.0)
         + canonical_bonus
         + subsystem_bonus
+        + concept_page_bonus
+        + plugin_type_penalty
+        + family_specific_bonus
         + example_penalty
         + quality_adjustment
         + generic_penalty
@@ -250,8 +390,13 @@ def _score_result(result: QueryResult, tokens: list[str], normalized_query: str)
         "context_hits": content_context_hits,
         "exact_heading_phrase": 1 if exact_heading else 0,
         "exact_title_phrase": 1 if exact_title else 0,
+        "query_intent": profile.intent,
+        "concept_families": profile.concept_families,
         "canonical_bonus": canonical_bonus,
         "subsystem_bonus": subsystem_bonus,
+        "concept_page_bonus": concept_page_bonus,
+        "plugin_type_penalty": plugin_type_penalty,
+        "family_specific_bonus": family_specific_bonus,
         "example_penalty": example_penalty,
         "quality_adjustment": quality_adjustment,
         "generic_penalty": generic_penalty,
@@ -261,11 +406,11 @@ def _score_result(result: QueryResult, tokens: list[str], normalized_query: str)
     return weighted_score, breakdown
 
 
-def _rerank_results(results: list[QueryResult], tokens: list[str], top_k: int, normalized_query: str) -> list[QueryResult]:
+def _rerank_results(results: list[QueryResult], profile: QueryProfile, top_k: int) -> list[QueryResult]:
     scored: list[QueryResult] = []
     for result in results:
-        weighted_score, breakdown = _score_result(result, tokens, normalized_query)
-        result.normalized_query = normalized_query
+        weighted_score, breakdown = _score_result(result, profile)
+        result.normalized_query = profile.normalized_query
         result.rerank_score = weighted_score
         result.rerank_breakdown = breakdown
         scored.append(result)
@@ -300,14 +445,15 @@ def query_chunks(db_path: Path, query_text: str, top_k: int) -> list[QueryResult
 
     store = SQLiteStore(db_path)
     store.initialize()
-    normalized_query, tokens = normalize_query_text(query_text)
+    profile = build_query_profile(query_text)
     candidates: list[QueryResult] = []
     seen_chunk_ids: set[str] = set()
+    candidate_limit = max(top_k * 10, 40)
     for fts_query in _build_fts_queries(query_text):
         if not fts_query:
             continue
         try:
-            current_results = store.query(query_text=fts_query, top_k=max(top_k * 8, top_k + 10))
+            current_results = store.query(query_text=fts_query, top_k=candidate_limit)
         except Exception:
             current_results = []
         for result in current_results:
@@ -315,7 +461,7 @@ def query_chunks(db_path: Path, query_text: str, top_k: int) -> list[QueryResult
                 continue
             seen_chunk_ids.add(result.chunk_id)
             candidates.append(result)
-    return _rerank_results(candidates, tokens, top_k, normalized_query)
+    return _rerank_results(candidates, profile, top_k)
 
 
 def build_context_bundles(

@@ -354,12 +354,21 @@ Current scoring signals include:
 - lexical FTS score from the candidate set
 - overlap with document title, section title, heading path, and source path
 - phrase hits in document and section titles
+- conceptual-query preference for explainer and subsystem pages when the query is clearly asking how something works
 - canonical-doc preference
+- concept-page preference over broader plugin-type pages for conceptual queries
+- targeted disambiguation for upgrade, language-string, output/template, and events query families
 - subsystem-path preference when the query clearly targets a subsystem page
 - conservative penalties for example-heavy or low-signal chunks
 - chunk-size quality heuristics
 
 Use `agentic-docs query ... --explain-ranking` to inspect the weighted score breakdown for each result.
+
+The current concept-aware reranker is still deliberately small and explicit. For example:
+
+- conceptual Mustache or rendering queries prefer template and output explainer pages over narrower plugin-specific examples
+- conceptual events queries prefer the events concept pages and `db/events.php` explainer over incidental references such as calendar or xAPI pages
+- broad plugin-type overview pages are demoted when a cleaner canonical explainer page is already in the candidate set
 
 ## Retrieval Evaluation
 
@@ -438,6 +447,29 @@ Bundles are assembled conservatively:
 - repeated heading prefixes are stripped from adjacent context to reduce prompt noise
 
 This is still intentionally simple. It is not a full prompt-assembly system, but it is a practical bridge toward agent-ready retrieval.
+
+## Inspecting Weak Passes
+
+The strict eval loop is the tuning source of truth.
+
+When a query stays weak, use:
+
+```bash
+agentic-docs eval --db-path <path> --eval-file ./evals/moodle_devdocs_eval.yaml --show-weak-details
+```
+
+and:
+
+```bash
+agentic-docs query "How do events work in plugins?" --db-path <path> --top-k 5 --explain-ranking --json
+```
+
+These diagnostics show:
+
+- the actual top-ranked result
+- the preferred-result rank if a better target was already retrieved
+- the explicit score breakdown that made one result outrank another
+- whether the remaining issue is broad-page dominance, plugin-type noise, or weak lexical evidence
 
 ## MDX Noise Reduction
 
