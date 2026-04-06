@@ -40,17 +40,30 @@ TOKEN_ALIASES = {
     "define": ["definition", "writing", "register"],
     "language": ["lang"],
     "strings": ["string"],
+    "string": ["strings", "lang", "pluginname", "get_string"],
     "services": ["service", "external"],
     "tasks": ["task"],
     "tests": ["test"],
+    "test": ["tests", "testing"],
     "forms": ["form"],
+    "form": ["forms"],
     "plugins": ["plugin"],
     "write": ["writing"],
+    "validation": ["validate", "addrule", "rule", "rules"],
+    "validate": ["validation", "addrule", "rule", "rules"],
+    "renderer": ["renderers", "rendering", "output"],
+    "renderers": ["renderer", "rendering", "output"],
+    "template": ["templates", "mustache"],
+    "templates": ["template", "mustache"],
+    "privacy": ["provider", "providers", "metadata"],
+    "provider": ["providers", "privacy", "metadata"],
+    "behat": ["acceptance", "tests", "testing"],
+    "phpunit": ["unit", "tests", "testing"],
 }
 HEADING_PREFIX_PATTERN = re.compile(r"^Heading:\s.*?(?:\n\n|\n)", re.DOTALL)
 GENERIC_PATH_SUFFIXES = {"docs/apis.md", "index.md"}
 CONCEPTUAL_QUERY_PATTERN = re.compile(
-    r"\b(how do|how does|what is|what are|define|write|add|register|work|works)\b"
+    r"\b(how do|how does|what is|what are|where do|where does|where are|where should|where can|which|find|define|write|add|register|documented|docs|documentation|work|works)\b"
 )
 
 
@@ -79,6 +92,12 @@ def is_canonical_path(path: str) -> bool:
 
     normalized = path.strip().lstrip("./")
     return not normalized.startswith("versioned_docs/")
+
+
+def _path_contains(path: str, fragment: str) -> bool:
+    normalized_path = path.strip().lstrip("./").lower()
+    normalized_fragment = fragment.strip().strip("/").lower()
+    return normalized_fragment in normalized_path
 
 
 def normalize_query_text(query_text: str) -> tuple[str, list[str]]:
@@ -126,12 +145,27 @@ def _concept_families(tokens: list[str]) -> list[str]:
     families: list[str] = []
     if "upgrade" in expanded or "upgrade.php" in expanded:
         families.append("upgrade")
-    if {"language", "lang"} & expanded and {"strings", "string"} & expanded:
+    if {"strings", "string"} & expanded and {
+        "language",
+        "lang",
+        "localisation",
+        "localization",
+        "plugin",
+        "plugins",
+        "get_string",
+        "pluginname",
+    } & expanded:
         families.append("language_strings")
     if {"mustache", "template", "templates", "output", "renderer", "renderers"} & expanded:
         families.append("output_templates")
+    if {"phpunit", "behat", "testing", "test", "tests", "acceptance", "unit"} & expanded:
+        families.append("testing")
+    if {"privacy", "provider", "providers", "metadata"} & expanded:
+        families.append("privacy")
     if {"events", "event"} & expanded:
         families.append("events")
+    if {"form", "forms"} & expanded and {"validation", "validate", "addrule", "rule", "rules"} & expanded:
+        families.append("forms_validation")
     return families
 
 
@@ -225,11 +259,19 @@ def _concept_page_bonus(result: QueryResult, profile: QueryProfile) -> float:
         return 0.0
 
     path = result.source_file_path.lower()
-    if any(segment in path for segment in ("/subsystems/", "/guides/", "/_files/", "/commonfiles/")):
+    if any(_path_contains(path, segment) for segment in ("subsystems", "guides", "_files", "commonfiles")):
         return 5.0
     if path == "docs/apis.md":
         return 2.0
     return 0.0
+
+
+def _is_docs_location_query(profile: QueryProfile) -> bool:
+    lowered = profile.raw_query.lower()
+    return any(
+        phrase in lowered
+        for phrase in ("where ", "where are", "where do", "where should", "find ", "docs", "documentation", "documented")
+    )
 
 
 def _plugin_type_penalty(result: QueryResult, profile: QueryProfile) -> float:
@@ -249,55 +291,167 @@ def _family_specific_bonus(result: QueryResult, profile: QueryProfile) -> float:
     path = result.source_file_path.lower()
     title = result.document_title.lower()
     heading = " > ".join(result.heading_path).lower()
+    expanded_tokens = set(profile.expanded_tokens)
     bonus = 0.0
 
     if "upgrade" in profile.concept_families:
-        if any(fragment in path for fragment in ("/guides/upgrade/", "/_files/db-upgrade", "/_files/upgrade-php")):
+        if _path_contains(path, "guides/upgrade"):
+            bonus += 20.0
+        elif any(_path_contains(path, fragment) for fragment in ("_files/db-upgrade", "_files/upgrade-php")):
             bonus += 14.0
         if "upgrade helpers" in heading or "upgrade.php" in heading:
             bonus += 4.0
-        if "/plugintypes/" in path:
-            bonus -= 8.0
+        if _path_contains(path, "plugintypes"):
+            bonus -= 12.0
 
     if "language_strings" in profile.concept_families:
-        if path.endswith("docs/apis/_files/lang.md") or "/_files/lang.md" in path:
-            bonus += 12.0
-        if "language files" in heading or "language files" in title:
-            bonus += 4.0
-        if "/plugintypes/" in path:
+        if path.endswith("docs/apis/_files/lang.md") or _path_contains(path, "_files/lang.md"):
+            bonus += 18.0
+        if any(text in heading or text in title for text in ("language files", "language strings", "lang", "string api")):
+            bonus += 6.0
+        if any(text in heading for text in ("dynamic strings", "working with strings")):
+            bonus -= 8.0
+        if any(_path_contains(path, fragment) for fragment in ("javascript", "string-deprecation", "plugincontribution/checklist")):
+            bonus -= 8.0
+        if _path_contains(path, "plugintypes"):
             bonus -= 5.0
 
     if "output_templates" in profile.concept_families:
-        if "/guides/templates/" in path:
+        renderer_only_query = "renderer" in expanded_tokens and not ({"mustache", "template", "templates"} & expanded_tokens)
+        if _path_contains(path, "guides/templates"):
             bonus += 18.0
-        elif "/subsystems/output/" in path:
+            if renderer_only_query:
+                bonus -= 8.0
+        elif _path_contains(path, "subsystems/output"):
             bonus += 10.0
+            if renderer_only_query:
+                bonus += 12.0
         if title == "templates":
             bonus += 6.0
         elif title == "output api":
-            bonus += 2.0
+            bonus += 8.0 if renderer_only_query else 2.0
         if "templates" in heading or "mustache" in heading:
             bonus += 6.0
         elif "renderers" in heading:
-            bonus += 4.0
+            bonus += 8.0
         elif "renderable" in heading:
             bonus += 4.0
-        if "/plugintypes/format/" in path:
+        if renderer_only_query and "dependency injection" in heading:
+            bonus -= 4.0
+        if renderer_only_query and "output api" in heading:
+            bonus += 8.0
+        if _path_contains(path, "plugintypes/format"):
+            bonus -= 8.0
+        if "renderer" in expanded_tokens:
+            if _path_contains(path, "subsystems/output") and "renderers" in heading:
+                bonus += 10.0
+            if _path_contains(path, "guides/templates") and "renderers" in heading:
+                bonus += 6.0
+
+    if "testing" in profile.concept_families:
+        if "behat" in expanded_tokens:
+            if _path_contains(path, "tools/behat"):
+                bonus += 18.0
+            if any(text in heading or text in title for text in ("behat", "writing", "running")):
+                bonus += 6.0
+            if _is_docs_location_query(profile):
+                if path.endswith("general/development/tools/behat/index.md") or path.endswith("general/development/tools/behat/writing.md"):
+                    bonus += 10.0
+                if path.endswith("general/development/tools/behat/running.md"):
+                    bonus -= 4.0
+            if _path_contains(path, "tools/mdk"):
+                bonus -= 10.0
+        if "phpunit" in expanded_tokens:
+            if _path_contains(path, "tools/phpunit"):
+                bonus += 18.0
+            if any(text in heading or text in title for text in ("phpunit", "unit testing", "writing")):
+                bonus += 6.0
+        if any(_path_contains(path, fragment) for fragment in ("accessibility", "deprecation", "policies")):
+            bonus -= 8.0
+
+    if "privacy" in profile.concept_families:
+        if any(_path_contains(path, fragment) for fragment in ("subsystems/privacy", "privacy")):
+            bonus += 18.0
+        if any(text in heading or text in title for text in ("privacy provider", "metadata provider", "request provider")):
+            bonus += 8.0
+        if "provider" in expanded_tokens and _path_contains(path, "providers") and not _path_contains(path, "privacy"):
             bonus -= 8.0
 
     if "events" in profile.concept_families:
-        if any(fragment in path for fragment in ("/subsystems/events/", "/_files/db-events")):
+        if any(_path_contains(path, fragment) for fragment in ("subsystems/events", "_files/db-events")):
             bonus += 18.0
         if "events api" in heading or "events api" in title:
             bonus += 6.0
+        if any(text in heading for text in ("observers", "triggering events", "event observers")):
+            bonus += 6.0
         if path == "docs/apis.md":
             bonus += 1.0
-        if "/_files/db-events" in path and any(token in profile.expanded_tokens for token in ("plugin", "plugins")):
-            bonus += 4.0
-        if any(fragment in path for fragment in ("/plugintypes/", "/calendar/", "/xapi/")):
+        if _path_contains(path, "_files/db-events") and any(token in profile.expanded_tokens for token in ("plugin", "plugins")):
+            bonus += 12.0
+        if path == "docs/apis.md" and any(token in profile.expanded_tokens for token in ("plugin", "plugins")):
+            bonus -= 4.0
+        if any(_path_contains(path, fragment) for fragment in ("plugintypes", "calendar", "xapi")):
             bonus -= 8.0
 
+    if "forms_validation" in profile.concept_families:
+        if any(_path_contains(path, fragment) for fragment in ("subsystems/form", "subsystems/forms")):
+            bonus += 12.0
+        if any(text in heading or text in title for text in ("validation", "addrule", "forms api")):
+            bonus += 10.0
+        if _path_contains(path, "subsystems/form/fields") and "validation" not in heading:
+            bonus -= 10.0
+
     return bonus
+
+
+def _section_focus_bonus(
+    result: QueryResult,
+    profile: QueryProfile,
+    section_overlap: int,
+    heading_overlap: int,
+    title_overlap: int,
+    section_phrase_hits: int,
+    heading_phrase_hits: int,
+) -> float:
+    section_focus = section_overlap + heading_overlap
+    phrase_focus = section_phrase_hits + heading_phrase_hits
+    bonus = 0.0
+
+    if profile.intent == "conceptual" and section_focus >= max(2, title_overlap + 1):
+        bonus += 4.0
+    if phrase_focus > 0 and section_focus > 0:
+        bonus += 3.0
+
+    heading = " > ".join(result.heading_path).lower()
+    section = (result.section_title or "").lower()
+    if any(text in heading or text in section for text in ("api", "validation", "renderers", "mustache", "language files", "phpunit", "behat", "privacy provider", "events")):
+        bonus += 2.0
+
+    return bonus
+
+
+def _incidental_match_penalty(
+    result: QueryResult,
+    profile: QueryProfile,
+    section_overlap: int,
+    heading_overlap: int,
+) -> float:
+    if profile.intent != "conceptual":
+        return 0.0
+
+    heading = " > ".join(result.heading_path).lower()
+    section = (result.section_title or "").lower()
+    path = result.source_file_path.lower()
+
+    if any(text in heading or text in section for text in ("typical workflows", "getting started", "other features", "checklist", "coding")):
+        return -6.0
+    if any(text in heading for text in ("dynamic strings", "working with strings", "executing behat tests")):
+        return -8.0
+    if _path_contains(path, "subsystems/form/fields") and "forms_validation" in profile.concept_families and heading_overlap <= 1:
+        return -6.0
+    if section_overlap == 0 and heading_overlap == 0 and profile.concept_families:
+        return -3.0
+    return 0.0
 
 
 def _example_penalty(result: QueryResult) -> float:
@@ -351,6 +505,16 @@ def _score_result(result: QueryResult, profile: QueryProfile) -> tuple[float, di
     concept_page_bonus = _concept_page_bonus(result, profile)
     plugin_type_penalty = _plugin_type_penalty(result, profile)
     family_specific_bonus = _family_specific_bonus(result, profile)
+    section_focus_bonus = _section_focus_bonus(
+        result,
+        profile,
+        section_overlap,
+        heading_overlap,
+        title_overlap,
+        section_phrase_hits,
+        heading_phrase_hits,
+    )
+    incidental_penalty = _incidental_match_penalty(result, profile, section_overlap, heading_overlap)
     example_penalty = _example_penalty(result)
     quality_adjustment = _chunk_quality_adjustment(result)
     generic_penalty = _generic_chunk_penalty(result, heading_overlap, title_overlap, path_overlap)
@@ -373,6 +537,8 @@ def _score_result(result: QueryResult, profile: QueryProfile) -> tuple[float, di
         + concept_page_bonus
         + plugin_type_penalty
         + family_specific_bonus
+        + section_focus_bonus
+        + incidental_penalty
         + example_penalty
         + quality_adjustment
         + generic_penalty
@@ -397,6 +563,8 @@ def _score_result(result: QueryResult, profile: QueryProfile) -> tuple[float, di
         "concept_page_bonus": concept_page_bonus,
         "plugin_type_penalty": plugin_type_penalty,
         "family_specific_bonus": family_specific_bonus,
+        "section_focus_bonus": section_focus_bonus,
+        "incidental_penalty": incidental_penalty,
         "example_penalty": example_penalty,
         "quality_adjustment": quality_adjustment,
         "generic_penalty": generic_penalty,

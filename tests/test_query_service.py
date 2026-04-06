@@ -31,6 +31,20 @@ def test_build_query_profile_marks_conceptual_queries_and_families() -> None:
     assert "output_templates" in profile.concept_families
 
 
+def test_build_query_profile_treats_where_docs_queries_as_conceptual() -> None:
+    profile = build_query_profile("Where do I find Moodle Behat test docs?")
+
+    assert profile.intent == "conceptual"
+    assert "testing" in profile.concept_families
+
+
+def test_build_query_profile_detects_plugin_string_concept_without_language_token() -> None:
+    profile = build_query_profile("How do Moodle plugin strings get defined?")
+
+    assert profile.intent == "conceptual"
+    assert "language_strings" in profile.concept_families
+
+
 def test_query_chunks_and_context_bundle(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
@@ -199,6 +213,37 @@ def test_query_prefers_language_string_explainer_over_plugin_type_page(tmp_path:
     assert float(results[0].rerank_breakdown["family_specific_bonus"]) > 0
 
 
+def test_query_prefers_language_string_explainer_over_generic_string_pages(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "_files").mkdir(parents=True)
+    (docs_dir / "guides" / "javascript").mkdir(parents=True)
+    (docs_dir / "community" / "plugincontribution").mkdir(parents=True)
+    (docs_dir / "apis" / "_files" / "lang.md").write_text(
+        "---\n"
+        "title: lang\n"
+        "---\n\n"
+        "## Language files\n\n"
+        "Define plugin strings in lang/en/<plugintype>_<pluginname>.php and retrieve them with get_string().\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "guides" / "javascript" / "index.md").write_text(
+        "# JavaScript guide\n\n## Working with Strings\n\nClient-side code can manipulate strings in JavaScript.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "community" / "plugincontribution" / "checklist.md").write_text(
+        "# Contribution checklist\n\n## Coding\n\n### Strings\n\nRemember to review plugin strings before publishing.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="How do Moodle plugin strings get defined?", top_k=3)
+
+    assert results[0].source_file_path == "apis/_files/lang.md"
+    assert float(results[0].rerank_breakdown["family_specific_bonus"]) > 0
+    assert float(results[0].rerank_breakdown["section_focus_bonus"]) > 0
+
+
 def test_query_prefers_templates_guide_over_plugin_specific_format_page(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     (docs_dir / "guides" / "templates").mkdir(parents=True)
@@ -249,6 +294,35 @@ def test_query_prefers_templates_guide_over_output_api_for_mustache_concept_quer
     assert results[0].source_file_path == "guides/templates/index.md"
     assert results[0].rerank_breakdown["query_intent"] == "conceptual"
     assert "output_templates" in results[0].rerank_breakdown["concept_families"]
+
+
+def test_query_prefers_output_api_renderer_section_over_templates_renderer_section_for_renderer_docs_query(
+    tmp_path: Path,
+) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "guides" / "templates").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "output").mkdir(parents=True)
+    (docs_dir / "guides" / "templates" / "index.md").write_text(
+        "---\n"
+        "title: Templates\n"
+        "---\n\n"
+        "## Rendering in PHP\n\n### Renderers\n\nTemplates can be rendered in PHP through renderers.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "apis" / "subsystems" / "output" / "index.md").write_text(
+        "---\n"
+        "title: Output API\n"
+        "---\n\n"
+        "## Page Output Journey\n\n### Accessing renderers with dependency injection\n\nRenderers are documented in the Output API.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="Where are Moodle renderers documented?", top_k=2)
+
+    assert results[0].source_file_path == "apis/subsystems/output/index.md"
+    assert float(results[0].rerank_breakdown["family_specific_bonus"]) > 0
 
 
 def test_query_prefers_events_concept_page_over_incidental_plugin_page(tmp_path: Path) -> None:
@@ -338,3 +412,76 @@ def test_context_bundle_respects_token_budget_and_compacts_heading_prefix(tmp_pa
     if len(bundles[0].chunks) > 1:
         for chunk in bundles[0].chunks[1:]:
             assert not chunk.content.startswith("Heading:")
+
+
+def test_query_prefers_behat_guide_over_mdk_workflow_for_docs_location_query(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "general" / "development" / "tools" / "behat").mkdir(parents=True)
+    (docs_dir / "general" / "development" / "tools").mkdir(parents=True, exist_ok=True)
+    (docs_dir / "general" / "development" / "tools" / "behat" / "writing.md").write_text(
+        "# Writing acceptance tests\n\n## Behat\n\nUse this guide to write Behat tests in Moodle.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "general" / "development" / "tools" / "mdk.md").write_text(
+        "# MDK\n\n## Typical workflows using MDK\n\n### Executing behat tests\n\nMDK can run Behat tests from the command line.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="Where do I find Moodle Behat test docs?", top_k=2)
+
+    assert results[0].source_file_path == "general/development/tools/behat/writing.md"
+    assert float(results[0].rerank_breakdown["family_specific_bonus"]) > 0
+    assert float(results[1].rerank_breakdown["family_specific_bonus"]) < float(
+        results[0].rerank_breakdown["family_specific_bonus"]
+    )
+
+
+def test_query_prefers_privacy_provider_doc_over_unrelated_provider_page(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "privacy").mkdir(parents=True)
+    (docs_dir / "integrations" / "providers").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "privacy" / "index.md").write_text(
+        "---\n"
+        "title: Privacy API\n"
+        "---\n\n"
+        "## Privacy provider\n\nPlugins implement privacy providers to describe stored data.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "integrations" / "providers" / "index.md").write_text(
+        "# Integration providers\n\n## Provider registry\n\nProviders can register integration services.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="How do privacy providers work for plugins?", top_k=2)
+
+    assert results[0].source_file_path == "apis/subsystems/privacy/index.md"
+    assert float(results[0].rerank_breakdown["family_specific_bonus"]) > 0
+
+
+def test_query_prefers_form_validation_section_over_field_reference(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "form" / "fields").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "form").mkdir(parents=True, exist_ok=True)
+    (docs_dir / "apis" / "subsystems" / "form" / "index.md").write_text(
+        "---\n"
+        "title: Forms API\n"
+        "---\n\n"
+        "## Commonly used functions\n\n### addRule()\n\nUse addRule() to validate Moodle form fields.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "apis" / "subsystems" / "form" / "fields" / "choicedropdown.md").write_text(
+        "# Choice dropdown\n\nChoice dropdown fields are used for form field selection.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="How do I validate a Moodle form field?", top_k=2)
+
+    assert results[0].source_file_path == "apis/subsystems/form/index.md"
+    assert float(results[0].rerank_breakdown["family_specific_bonus"]) > 0
+    assert float(results[1].rerank_breakdown["incidental_penalty"]) < 0

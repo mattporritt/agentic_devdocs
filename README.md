@@ -6,8 +6,8 @@ It is built to answer a practical question: when an agent is working on Moodle L
 
 The current phase focuses on three things:
 
-- field-aware ranking improvements over the FTS5 candidate set
-- compact context bundles that are easier for agentic tools to consume
+- concept-aware ranking improvements over the FTS5 candidate set
+- section-level preference for the best explanatory section over broader matches
 - weak-pass diagnostics that make retrieval tuning more actionable
 
 The current evaluation flow is intentionally stricter than earlier iterations:
@@ -71,7 +71,8 @@ Pipeline:
 5. Chunk content is indexed with FTS5 for retrieval.
 6. Queries are normalized for safer FTS5 matching, then reranked with explicit field-aware scoring.
 7. Canonical docs are preferred over equivalent versioned docs when the match quality is otherwise similar.
-8. `query`, `stats`, inspect commands, and `eval` expose the corpus in a debuggable way, including ranking diagnostics for weak passes.
+8. Concept-heavy queries can receive concept-family and section-focus boosts so explanatory sections beat incidental mentions more often.
+9. `query`, `stats`, inspect commands, and `eval` expose the corpus in a debuggable way, including ranking diagnostics for weak passes.
 
 Core modules:
 
@@ -373,9 +374,10 @@ Current scoring signals include:
 - conceptual-query preference for explainer and subsystem pages when the query is clearly asking how something works
 - canonical-doc preference
 - concept-page preference over broader plugin-type pages for conceptual queries
-- targeted disambiguation for upgrade, language-string, output/template, and events query families
+- section-focus bonuses when the heading path and section title align better than the broader page title
+- targeted disambiguation for upgrade, language-string, output/template, testing, privacy, forms-validation, and events query families
 - subsystem-path preference when the query clearly targets a subsystem page
-- conservative penalties for example-heavy or low-signal chunks
+- conservative penalties for example-heavy, workflow-heavy, or otherwise incidental chunks
 - chunk-size quality heuristics
 
 Use `agentic-docs query ... --explain-ranking` to inspect the weighted score breakdown for each result.
@@ -383,7 +385,9 @@ Use `agentic-docs query ... --explain-ranking` to inspect the weighted score bre
 The current concept-aware reranker is still deliberately small and explicit. For example:
 
 - conceptual Mustache or rendering queries prefer template and output explainer pages over narrower plugin-specific examples
+- renderer-only and docs-location queries prefer Output API sections over template examples when the user is really asking where renderers are documented
 - conceptual events queries prefer the events concept pages and `db/events.php` explainer over incidental references such as calendar or xAPI pages
+- concept-heavy strings, privacy-provider, PHPUnit, and Behat queries prefer subsystem/testing explainers over broad checklists, workflow pages, or incidental mentions
 - broad plugin-type overview pages are demoted when a cleaner canonical explainer page is already in the candidate set
 
 ## Retrieval Evaluation
