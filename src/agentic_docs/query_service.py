@@ -75,6 +75,7 @@ class QueryProfile:
     expanded_tokens: list[str]
     intent: str
     concept_families: list[str]
+    task_intent: str
 
 
 def canonical_path_key(path: str) -> str:
@@ -123,6 +124,26 @@ def classify_query_intent(query_text: str, tokens: list[str]) -> str:
     if any(token in {"api", "guide", "docs", "documentation"} for token in tokens):
         return "conceptual"
     return "keyword"
+
+
+FILE_LOCATION_QUERY_PATTERN = re.compile(
+    r"\b(where does|where do|where should|what file|where is this defined|where is this registered|where are|file location|location)\b"
+)
+IMPLEMENTATION_QUERY_PATTERN = re.compile(
+    r"\b(how do i implement|how do i write|how do i add|how do i configure|how do i define|how do .*registered|how do .*declare)\b"
+)
+FILE_ANCHOR_PATTERN = re.compile(r"`?([A-Za-z0-9_./-]+\.(?:php|mdx|md|js|mustache|yml))`?")
+
+
+def classify_task_intent(query_text: str, tokens: list[str]) -> str:
+    lowered = query_text.lower()
+    if FILE_LOCATION_QUERY_PATTERN.search(lowered):
+        return "file_location"
+    if IMPLEMENTATION_QUERY_PATTERN.search(lowered):
+        return "implementation_guide"
+    if any(token in {"file", "registered", "defined", "location", "write", "implement", "configure"} for token in tokens):
+        return "implementation_guide"
+    return "general"
 
 
 def _expanded_tokens(tokens: list[str]) -> list[str]:
@@ -181,6 +202,7 @@ def build_query_profile(query_text: str) -> QueryProfile:
         expanded_tokens=expanded_tokens,
         intent=classify_query_intent(query_text, tokens),
         concept_families=_concept_families(tokens),
+        task_intent=classify_task_intent(query_text, tokens),
     )
 
 
@@ -635,6 +657,8 @@ def query_chunks(db_path: Path, query_text: str, top_k: int) -> list[QueryResult
 def build_context_bundles(
     db_path: Path,
     results: list[QueryResult],
+    support_results: list[QueryResult] | None = None,
+    query_text: str | None = None,
     include_previous: bool = False,
     include_next: bool = False,
     bundle_max_tokens: int = 600,
@@ -645,10 +669,13 @@ def build_context_bundles(
     store = SQLiteStore(db_path)
     store.initialize()
     tokenizer = get_tokenizer(tokenizer_name)
+    profile = build_query_profile(query_text) if query_text else None
+    support_pool = support_results or results
 
     bundles: list[ContextBundle] = []
     for rank, result in enumerate(results, start=1):
         section_chunks = store.get_section_chunks(result.section_id)
+        document_chunks = store.get_document_chunks(result.document_id)
         index_by_id = {chunk.chunk_id: idx for idx, chunk in enumerate(section_chunks)}
         pivot_index = index_by_id.get(result.chunk_id)
         match_content = result.content
@@ -664,6 +691,9 @@ def build_context_bundles(
                 role="match",
                 content=match_content,
                 token_count=match_token_count,
+                source_file_path=result.source_file_path,
+                section_title=result.section_title,
+                heading_path=result.heading_path,
             )
         ]
         total_tokens = match_token_count
@@ -684,6 +714,9 @@ def build_context_bundles(
                                 role="previous",
                                 content=compact_content,
                                 token_count=compact_tokens,
+                                source_file_path=chunk.source_file_path,
+                                section_title=chunk.section_title,
+                                heading_path=chunk.heading_path,
                             ),
                         )
                         total_tokens += compact_tokens
@@ -701,6 +734,9 @@ def build_context_bundles(
                                 role="next",
                                 content=compact_content,
                                 token_count=compact_tokens,
+                                source_file_path=chunk.source_file_path,
+                                section_title=chunk.section_title,
+                                heading_path=chunk.heading_path,
                             )
                         )
                         total_tokens += compact_tokens
@@ -709,6 +745,105 @@ def build_context_bundles(
                     right += 1
                 if not added:
                     break
+        support_diagnostic: dict[str, str | int | list[str] | bool] = {}
+        if profile is not None and profile.task_intent != "general" and bundle_max_tokens > total_tokens:
+            extra_support_chunks: list[QueryResult] = []
+            support_doc_ids: set[str] = set()
+            for candidate in support_pool[: min(len(support_pool), 5)]:
+                if candidate.document_id == result.document_id or candidate.document_id in support_doc_ids:
+                    continue
+                support_doc_ids.add(candidate.document_id)
+                extra_support_chunks.extend(store.get_document_chunks(candidate.document_id))
+            support_candidate = _select_task_support_chunk(
+                primary=result,
+                candidate_results=support_pool,
+                document_chunks=document_chunks + extra_support_chunks,
+                profile=profile,
+                existing_chunk_ids={chunk.chunk_id for chunk in ordered_chunks},
+                preferred_support_budget=max(bundle_max_tokens - 80, 0),
+            )
+            if support_candidate is not None:
+                support_content = _compact_bundle_chunk_content(support_candidate.content)
+                support_tokens = tokenizer.count_tokens(support_content)
+                if total_tokens + support_tokens <= bundle_max_tokens:
+                    ordered_chunks.append(
+                        ContextBundleChunk(
+                            chunk_id=support_candidate.chunk_id,
+                            role="support",
+                            content=support_content,
+                            token_count=support_tokens,
+                            source_file_path=support_candidate.source_file_path,
+                            section_title=support_candidate.section_title,
+                            heading_path=support_candidate.heading_path,
+                        )
+                    )
+                    total_tokens += support_tokens
+                    selection_strategy = "task_support"
+                    support_diagnostic = {
+                        "task_intent": profile.task_intent,
+                        "support_added": True,
+                        "support_chunk_id": support_candidate.chunk_id,
+                        "support_source_file_path": support_candidate.source_file_path,
+                        "support_heading_path": support_candidate.heading_path,
+                        "support_file_anchors": _extract_file_anchors(support_candidate.content),
+                    }
+                else:
+                    available_for_match = bundle_max_tokens - support_tokens
+                    minimum_match_tokens = 80
+                    if available_for_match >= minimum_match_tokens and ordered_chunks:
+                        primary_chunk = ordered_chunks[0]
+                        trimmed_content = _truncate_text_to_tokens(primary_chunk.content, available_for_match, tokenizer)
+                        trimmed_tokens = tokenizer.count_tokens(trimmed_content)
+                        if trimmed_tokens >= minimum_match_tokens:
+                            ordered_chunks[0] = ContextBundleChunk(
+                                chunk_id=primary_chunk.chunk_id,
+                                role=primary_chunk.role,
+                                content=trimmed_content,
+                                token_count=trimmed_tokens,
+                                source_file_path=primary_chunk.source_file_path,
+                                section_title=primary_chunk.section_title,
+                                heading_path=primary_chunk.heading_path,
+                            )
+                            ordered_chunks.append(
+                                ContextBundleChunk(
+                                    chunk_id=support_candidate.chunk_id,
+                                    role="support",
+                                    content=support_content,
+                                    token_count=support_tokens,
+                                    source_file_path=support_candidate.source_file_path,
+                                    section_title=support_candidate.section_title,
+                                    heading_path=support_candidate.heading_path,
+                                )
+                            )
+                            total_tokens = sum(chunk.token_count for chunk in ordered_chunks)
+                            selection_strategy = "task_support_truncated"
+                            support_diagnostic = {
+                                "task_intent": profile.task_intent,
+                                "support_added": True,
+                                "support_chunk_id": support_candidate.chunk_id,
+                                "support_source_file_path": support_candidate.source_file_path,
+                                "support_heading_path": support_candidate.heading_path,
+                                "support_file_anchors": _extract_file_anchors(support_candidate.content),
+                                "support_trimmed_match": True,
+                            }
+                        else:
+                            support_diagnostic = {
+                                "task_intent": profile.task_intent,
+                                "support_added": False,
+                                "support_rejected": "budget",
+                            }
+                    else:
+                        support_diagnostic = {
+                            "task_intent": profile.task_intent,
+                            "support_added": False,
+                            "support_rejected": "budget",
+                        }
+            else:
+                support_diagnostic = {
+                    "task_intent": profile.task_intent,
+                    "support_added": False,
+                    "support_rejected": "no_candidate",
+                }
         bundles.append(
             ContextBundle(
                 rank=rank,
@@ -729,6 +864,8 @@ def build_context_bundles(
                     "chunk_roles": [chunk.role for chunk in ordered_chunks],
                     "truncated": selection_strategy == "truncated_match",
                     "duplicate_chunk_count": _bundle_duplicate_count(ordered_chunks),
+                    "task_intent": profile.task_intent if profile is not None else "general",
+                    **support_diagnostic,
                 },
             )
         )
@@ -759,3 +896,143 @@ def _bundle_duplicate_count(chunks: list[ContextBundleChunk]) -> int:
             continue
         seen.add(normalized)
     return duplicates
+
+
+def _extract_file_anchors(text: str) -> list[str]:
+    anchors: list[str] = []
+    for match in FILE_ANCHOR_PATTERN.findall(text):
+        if match not in anchors:
+            anchors.append(match)
+    return anchors
+
+
+def _expected_anchor_terms(profile: QueryProfile) -> list[str]:
+    anchors: list[str] = []
+    expanded = set(profile.expanded_tokens)
+    if {"setting", "settings", "admin"} & expanded:
+        anchors.append("settings.php")
+    if {"task", "tasks", "scheduled"} & expanded:
+        anchors.append("db/tasks.php")
+    if {"service", "services", "external", "web"} & expanded:
+        anchors.append("db/services.php")
+    if {"behat", "acceptance"} & expanded:
+        anchors.append("Writing acceptance tests")
+    if {"phpunit", "unit"} & expanded:
+        anchors.append("Writing PHPUnit tests")
+    if {"event", "events"} & expanded:
+        anchors.append("db/events.php")
+    return anchors
+
+
+def _support_keyword_overlap(candidate: QueryResult, profile: QueryProfile) -> int:
+    heading_text = " ".join(candidate.heading_path).lower()
+    section_text = (candidate.section_title or "").lower()
+    title_text = candidate.document_title.lower()
+    content_text = candidate.content.lower()
+    overlap = 0
+    for token in profile.expanded_tokens:
+        if len(token) < 3:
+            continue
+        if token in heading_text:
+            overlap += 3
+        elif token in section_text or token in title_text:
+            overlap += 2
+        elif token in content_text:
+            overlap += 1
+    return overlap
+
+
+def _candidate_support_score(candidate: QueryResult, primary: QueryResult, profile: QueryProfile) -> float:
+    score = 0.0
+    anchors = _extract_file_anchors(candidate.content)
+    heading_text = " > ".join(candidate.heading_path).lower()
+    section_text = (candidate.section_title or "").lower()
+    title_text = candidate.document_title.lower()
+    path_text = candidate.source_file_path.lower()
+    expected = _expected_anchor_terms(profile)
+    keyword_overlap = _support_keyword_overlap(candidate, profile)
+
+    if candidate.document_id == primary.document_id:
+        score += 4.0
+    elif canonical_path_key(candidate.source_file_path) == canonical_path_key(primary.source_file_path):
+        score += 2.0
+
+    score += float(keyword_overlap)
+
+    if profile.task_intent == "file_location":
+        if anchors:
+            score += 8.0
+        if "where to find the code" in heading_text:
+            score += 4.0
+    if profile.task_intent == "implementation_guide":
+        if any(term.lower() in heading_text or term.lower() in section_text or term.lower() in title_text for term in ("writing", "creating", "declare", "register", "settings", "acceptance tests", "external functions")):
+            score += 6.0
+        if anchors:
+            score += 4.0
+
+    for expected_anchor in expected:
+        if expected_anchor.lower() in candidate.content.lower():
+            score += 16.0
+        if expected_anchor.lower() in heading_text or expected_anchor.lower() in section_text:
+            score += 10.0
+
+    if "web-services" in profile.concept_families or "web_services" in profile.concept_families:
+        if any(term in heading_text or term in section_text or term in title_text or term in path_text for term in ("service", "services", "external")):
+            score += 8.0
+    if "testing" in profile.concept_families:
+        if any(term in heading_text or term in section_text or term in title_text for term in ("behat", "phpunit", "acceptance tests")):
+            score += 8.0
+
+    if candidate.source_file_path == primary.source_file_path and candidate.section_id != primary.section_id:
+        score += 4.0
+    if "example" in heading_text or "examples" in heading_text:
+        score -= 6.0
+    if keyword_overlap == 0:
+        score -= 8.0
+
+    return score
+
+
+def _select_task_support_chunk(
+    primary: QueryResult,
+    candidate_results: list[QueryResult],
+    document_chunks: list[QueryResult],
+    profile: QueryProfile,
+    existing_chunk_ids: set[str],
+    preferred_support_budget: int | None = None,
+) -> QueryResult | None:
+    support_pool: list[QueryResult] = []
+    seen_ids = set(existing_chunk_ids)
+
+    for candidate in candidate_results:
+        if candidate.chunk_id in seen_ids or candidate.chunk_id == primary.chunk_id:
+            continue
+        seen_ids.add(candidate.chunk_id)
+        support_pool.append(candidate)
+
+    for chunk in document_chunks:
+        if chunk.chunk_id in seen_ids or chunk.chunk_id == primary.chunk_id:
+            continue
+        seen_ids.add(chunk.chunk_id)
+        support_pool.append(chunk)
+
+    primary_text = primary.content.lower()
+    expected = _expected_anchor_terms(profile)
+    if expected and any(anchor.lower() in primary_text for anchor in expected):
+        return None
+
+    ranked = sorted(
+        support_pool,
+        key=lambda candidate: (
+            0 if preferred_support_budget is None or candidate.token_count <= preferred_support_budget else 1,
+            -_candidate_support_score(candidate, primary, profile),
+            candidate.token_count,
+            candidate.chunk_id,
+        ),
+    )
+    if not ranked:
+        return None
+    best = ranked[0]
+    if _candidate_support_score(best, primary, profile) <= 0:
+        return None
+    return best

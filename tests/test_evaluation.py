@@ -416,6 +416,92 @@ def test_run_eval_with_bundles_can_report_insufficient_when_required_context_is_
     assert report.outcomes[0].bundle_required_headings_missing == ["settings.php"]
 
 
+def test_run_eval_with_bundles_completes_web_service_bundle_using_support_chunk(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "apis.md").write_text(
+        "# API Guides\n\n## Web services API\n\nThe Web services API lets plugins expose external functions.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "writing-a-service.md").write_text(
+        "# Writing a new service\n\n## Declare the web service function\n\nDeclare the function in `db/services.php`.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: web-services",
+                "    bucket: web-services",
+                "    concept_id: web-services",
+                "    query: How do I define web services for a plugin?",
+                "    preferred_document_paths:",
+                "      - writing-a-service.md",
+                "    acceptable_document_paths:",
+                "      - apis.md",
+                "    acceptable_heading_substrings:",
+                "      - Web services API",
+                "    required_heading_substrings_for_bundle:",
+                "      - db/services.php",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_eval(db_path=db_path, eval_file=eval_file, with_bundles=True, bundle_max_tokens=220)
+
+    assert report.outcomes[0].grade == "WEAK PASS"
+    assert report.outcomes[0].bundle_grade == "COMPLETE"
+    assert "db/services.php" in report.outcomes[0].bundle_required_headings_present
+
+
+def test_run_eval_with_bundles_completes_admin_file_location_bundle_with_trimmed_support(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "admin.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "## Individual settings\n\n"
+        + ("Choose a suitable admin setting and configure defaults for your plugin. " * 30)
+        + "\n\n## Where to find the code\n\n"
+        "Plugin admin settings live in `settings.php` and are managed from `admin/settings.php`.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=120, overlap_tokens=10)
+
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: admin-settings-file-location",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
+                "    query: Where do Moodle plugin admin settings go?",
+                "    preferred_document_paths:",
+                "      - admin.md",
+                "    required_heading_substrings_for_bundle:",
+                "      - settings.php",
+                "    max_reasonable_bundle_tokens: 180",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_eval(db_path=db_path, eval_file=eval_file, with_bundles=True, bundle_max_tokens=180)
+
+    assert report.outcomes[0].grade == "STRONG PASS"
+    assert report.outcomes[0].bundle_grade == "COMPLETE"
+    assert report.outcomes[0].bundle_selection_strategy in {"task_support", "task_support_truncated"}
+    assert "settings.php" in report.outcomes[0].bundle_required_headings_present
+
+
 def test_bundle_reporting_stays_consistent_across_renderers(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()

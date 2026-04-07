@@ -93,6 +93,9 @@ class ContextBundleChunk(BaseModel):
     role: str
     content: str
     token_count: int
+    source_file_path: str
+    section_title: str | None = None
+    heading_path: list[str] = Field(default_factory=list)
 
 
 class ContextBundle(BaseModel):

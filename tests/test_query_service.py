@@ -45,6 +45,14 @@ def test_build_query_profile_detects_plugin_string_concept_without_language_toke
     assert "language_strings" in profile.concept_families
 
 
+def test_build_query_profile_detects_task_oriented_intents() -> None:
+    location_profile = build_query_profile("Where do I put plugin lang strings?")
+    implementation_profile = build_query_profile("How do I define web services for a plugin?")
+
+    assert location_profile.task_intent == "file_location"
+    assert implementation_profile.task_intent == "implementation_guide"
+
+
 def test_query_chunks_and_context_bundle(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
@@ -412,6 +420,166 @@ def test_context_bundle_respects_token_budget_and_compacts_heading_prefix(tmp_pa
     if len(bundles[0].chunks) > 1:
         for chunk in bundles[0].chunks[1:]:
             assert not chunk.content.startswith("Heading:")
+
+
+def test_context_bundle_adds_file_anchor_support_from_same_document(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "admin").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "admin" / "index.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "## Individual settings\n\n"
+        "Choose a suitable admin setting and configure defaults for your plugin.\n\n"
+        "## Adding settings in settings.php\n\n"
+        "Plugin admin settings live in settings.php and are registered there.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=40, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="Where do Moodle plugin admin settings go?", top_k=3)
+    bundles = build_context_bundles(
+        db_path=db_path,
+        results=results[:1],
+        support_results=results,
+        query_text="Where do Moodle plugin admin settings go?",
+        bundle_max_tokens=120,
+    )
+
+    assert len(bundles) == 1
+    assert any("settings.php" in chunk.content for chunk in bundles[0].chunks)
+    assert bundles[0].diagnostics["task_intent"] == "file_location"
+    if bundles[0].selection_strategy in {"task_support", "task_support_truncated"}:
+        assert any(chunk.role == "support" for chunk in bundles[0].chunks)
+    assert any("settings.php" in chunk.content for chunk in bundles[0].chunks)
+
+
+def test_context_bundle_trims_primary_chunk_to_fit_file_anchor_support(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "admin").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "admin" / "index.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "## Individual settings\n\n"
+        + ("Choose a suitable admin setting and configure defaults for your plugin. " * 30)
+        + "\n\n## Where to find the code\n\n"
+        "Plugin admin settings live in `settings.php` and are managed from `admin/settings.php`.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=120, overlap_tokens=10)
+
+    results = query_chunks(db_path=db_path, query_text="Where do Moodle plugin admin settings go?", top_k=3)
+    bundles = build_context_bundles(
+        db_path=db_path,
+        results=results[:1],
+        support_results=results,
+        query_text="Where do Moodle plugin admin settings go?",
+        bundle_max_tokens=180,
+    )
+
+    assert len(bundles) == 1
+    assert bundles[0].selection_strategy in {"task_support", "task_support_truncated"}
+    assert bundles[0].bundle_token_count <= 180
+    assert any("settings.php" in chunk.content for chunk in bundles[0].chunks)
+    assert bundles[0].diagnostics["support_added"] is True
+
+
+def test_context_bundle_adds_file_anchor_support_from_other_result(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "apis.md").write_text(
+        "# API Guides\n\n## Web services API\n\nThe Web services API lets plugins expose external functions.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "writing-a-service.md").write_text(
+        "# Writing a new service\n\n## Declare the web service function\n\nDeclare the function in `db/services.php`.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="How do I define web services for a plugin?", top_k=3)
+    bundles = build_context_bundles(
+        db_path=db_path,
+        results=results[:1],
+        support_results=results,
+        query_text="How do I define web services for a plugin?",
+        bundle_max_tokens=160,
+    )
+
+    assert len(bundles) == 1
+    assert any(chunk.role == "support" for chunk in bundles[0].chunks)
+    assert any(chunk.source_file_path == "writing-a-service.md" for chunk in bundles[0].chunks)
+    assert any("db/services.php" in chunk.content for chunk in bundles[0].chunks)
+
+
+def test_context_bundle_prefers_anchor_rich_support_chunk_from_other_document(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "apis.md").write_text(
+        "# API Guides\n\n"
+        "## Web services API\n\n"
+        "The Web services API lets plugins expose external functions.\n\n"
+        "## Admin settings API\n\n"
+        "The Admin settings API lets plugins expose configuration.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "writing-a-service.md").write_text(
+        "# Writing a new service\n\n"
+        "## Bump the plugin version\n\n"
+        "Increase version.php after adding your service.\n\n"
+        "## Write the external function descriptions\n\n"
+        "External functions are declared through `db/services.php` and related classes.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="How do I define web services for a plugin?", top_k=5)
+    bundles = build_context_bundles(
+        db_path=db_path,
+        results=results[:1],
+        support_results=results,
+        query_text="How do I define web services for a plugin?",
+        bundle_max_tokens=220,
+    )
+
+    assert len(bundles) == 1
+    assert any(chunk.role == "support" for chunk in bundles[0].chunks)
+    assert any(chunk.source_file_path == "writing-a-service.md" for chunk in bundles[0].chunks)
+    assert any("db/services.php" in chunk.content for chunk in bundles[0].chunks)
+    assert all("Admin settings API" not in chunk.content for chunk in bundles[0].chunks if chunk.role == "support")
+
+
+def test_context_bundle_adds_behat_writing_support_for_location_query(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "general" / "development" / "tools" / "behat").mkdir(parents=True)
+    (docs_dir / "general" / "development" / "tools" / "behat" / "index.md").write_text(
+        "# Behat\n\n## Moodle integration\n\n### Admin tool \"Acceptance testing\"\n\nUse the admin tool to inspect available steps.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "general" / "development" / "tools" / "behat" / "writing.md").write_text(
+        "# Writing acceptance tests\n\n## Writing acceptance tests\n\nThis guide explains how to write Behat tests.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="Where do I find Moodle Behat test docs?", top_k=3)
+    bundles = build_context_bundles(
+        db_path=db_path,
+        results=results[:1],
+        support_results=results,
+        query_text="Where do I find Moodle Behat test docs?",
+        bundle_max_tokens=220,
+    )
+
+    assert len(bundles) == 1
+    assert any(chunk.source_file_path.endswith("writing.md") for chunk in bundles[0].chunks)
+    assert any("Writing acceptance tests" in " > ".join(chunk.heading_path) or "Writing acceptance tests" in chunk.content for chunk in bundles[0].chunks)
 
 
 def test_query_prefers_behat_guide_over_mdk_workflow_for_docs_location_query(tmp_path: Path) -> None:

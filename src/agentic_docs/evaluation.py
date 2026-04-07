@@ -104,15 +104,18 @@ def _bundle_expected_headings(case: EvalCase) -> list[str]:
 
 
 def _bundle_haystacks(bundle: ContextBundle) -> list[str]:
-    heading_text = " > ".join(bundle.heading_path).lower()
-    chunk_text = "\n\n".join(chunk.content for chunk in bundle.chunks).lower()
-    return [
+    haystacks = [
         bundle.source_file_path.lower(),
         bundle.document_title.lower(),
         (bundle.section_title or "").lower(),
-        heading_text,
-        chunk_text,
+        " > ".join(bundle.heading_path).lower(),
     ]
+    for chunk in bundle.chunks:
+        haystacks.append(chunk.source_file_path.lower())
+        haystacks.append((chunk.section_title or "").lower())
+        haystacks.append(" > ".join(chunk.heading_path).lower())
+        haystacks.append(chunk.content.lower())
+    return haystacks
 
 
 def _bundle_redundancy_count(bundle: ContextBundle) -> int:
@@ -150,7 +153,12 @@ def _grade_bundle(
     required_headings = case.required_heading_substrings_for_bundle
     preferred_headings = _bundle_expected_headings(case)
     haystacks = _bundle_haystacks(bundle)
-    matched_paths = _matching_paths(expected_paths, bundle.source_file_path)
+    bundle_paths = [bundle.source_file_path] + [chunk.source_file_path for chunk in bundle.chunks]
+    matched_paths: list[str] = []
+    for path in bundle_paths:
+        for match in _matching_paths(expected_paths, path):
+            if match not in matched_paths:
+                matched_paths.append(match)
     required_present = _matches_any(required_headings, haystacks)
     preferred_present = _matches_any(preferred_headings, haystacks)
     missing_required = [heading for heading in required_headings if heading not in required_present]
@@ -158,7 +166,7 @@ def _grade_bundle(
     far_over_budget = budget > 0 and bundle.bundle_token_count > int(budget * 1.35)
     redundancy_count = _bundle_redundancy_count(bundle)
     chunk_count = len(bundle.chunks)
-    too_thin = bundle.bundle_token_count < 40
+    too_thin = bundle.bundle_token_count < 40 and chunk_count <= 1
     truncated = bundle.selection_strategy == "truncated_match"
 
     diagnostic_parts: list[str] = []
@@ -640,6 +648,8 @@ def run_eval(
             bundles = build_context_bundles(
                 db_path=db_path,
                 results=results[:1],
+                support_results=results,
+                query_text=case.query,
                 include_previous=include_previous,
                 include_next=include_next,
                 bundle_max_tokens=case.max_reasonable_bundle_tokens or bundle_max_tokens,

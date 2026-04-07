@@ -116,6 +116,7 @@ def query(
         bundles = build_context_bundles(
             db_path=config.db_path,
             results=results,
+            query_text=query_text,
             include_previous=include_previous,
             include_next=include_next,
             bundle_max_tokens=bundle_max_tokens,
@@ -138,7 +139,9 @@ def query(
             if bundle.snippet:
                 typer.echo(f"snippet: {bundle.snippet}")
             for chunk in bundle.chunks:
-                typer.echo(f"[{chunk.role}] {chunk.chunk_id} ({chunk.token_count} tokens)")
+                typer.echo(
+                    f"[{chunk.role}] {chunk.chunk_id} ({chunk.token_count} tokens) {chunk.source_file_path} {' > '.join(chunk.heading_path)}"
+                )
                 typer.echo(chunk.content)
                 typer.echo("")
         return

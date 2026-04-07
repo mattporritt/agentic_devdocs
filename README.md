@@ -475,6 +475,7 @@ It is normal and acceptable for a broader benchmark to reduce headline scores. A
 
 Bucket results help answer where retrieval is weakest.
 Concept results help answer whether retrieval is brittle to alternate phrasings of the same task.
+Bundle results help answer whether the retrieved context is actually actionable for an agent, especially on file-location and implementation-guide queries.
 
 ## Context Bundles
 
@@ -489,7 +490,7 @@ Bare chunk retrieval is useful for debugging, but agent workflows usually need a
 - heading path
 - token counts
 - repo commit hash
-- a selection strategy marker such as `match_only`, `section_window`, or `truncated_match`
+- a selection strategy marker such as `match_only`, `section_window`, `task_support`, `task_support_truncated`, or `truncated_match`
 - optional adjacent chunks from the same section when they fit within the token budget
 
 Bundles are assembled conservatively:
@@ -497,7 +498,16 @@ Bundles are assembled conservatively:
 - the matched chunk is always included
 - oversize matched chunks are truncated to the requested bundle budget
 - same-section adjacent chunks are added only when explicitly requested and they still fit the budget
+- file-location and implementation-guide queries may add one support chunk when it contributes a concrete implementation anchor such as `settings.php`, `db/tasks.php`, `db/services.php`, or nearby writing-guide context
+- if that support chunk is more valuable than the full matched chunk, the matched chunk may be trimmed so the final bundle still fits the budget
 - repeated heading prefixes are stripped from adjacent context to reduce prompt noise
+
+Task-oriented bundle completion is rule-based and inspectable:
+
+- file-location intent is detected from phrasing like `where do`, `what file`, `where is this defined`, or `where is this registered`
+- implementation-guide intent is detected from phrasing like `how do I implement`, `how do I write`, `how do I define`, or `how do I configure`
+- support chunks are chosen with explicit file-anchor and concept-overlap heuristics rather than opaque semantic scoring
+- `--explain-bundle` reports the detected task intent, whether a support chunk was added, which file anchors were surfaced, and whether the match had to be trimmed to stay inside budget
 
 Bundle usefulness is now measured explicitly in eval runs. The current heuristics are deliberately simple and inspectable:
 
@@ -506,6 +516,13 @@ Bundle usefulness is now measured explicitly in eval runs. The current heuristic
 - `INSUFFICIENT`: critical required heading is missing, no usable bundle was produced, or the bundle is significantly over budget
 
 This lets the benchmark expose cases where retrieval is already strong but the returned context package is still weak for an agent.
+
+This matters most for concrete task queries such as:
+
+- where do plugin admin settings go
+- what file defines scheduled tasks
+- where are external service functions declared
+- where do I find the Behat writing guide
 
 This is still intentionally simple. It is not a full prompt-assembly system, but it is a practical bridge toward agent-ready retrieval.
 
