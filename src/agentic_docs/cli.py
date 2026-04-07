@@ -282,6 +282,8 @@ def verify_devdocs(
     tokenizer: Annotated[str, typer.Option(help="Tokenizer adapter to use.")] = "openai",
     max_tokens: Annotated[int, typer.Option(help="Maximum tokens per chunk.")] = 400,
     overlap_tokens: Annotated[int, typer.Option(help="Overlap tokens between adjacent chunks.")] = 60,
+    with_bundles: Annotated[bool, typer.Option(help="Evaluate bundle usefulness as part of the validation payload.")] = True,
+    bundle_max_tokens: Annotated[int, typer.Option(help="Maximum tokens for evaluated context bundles in validation.")] = 450,
     skip_sync: Annotated[bool, typer.Option(help="Use the existing local checkout without attempting a network sync.")] = False,
     allow_dirty: Annotated[bool, typer.Option(help="Allow validation to run from a dirty git working tree.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
@@ -307,7 +309,16 @@ def verify_devdocs(
         query_text: [result.model_dump() for result in query_chunks(db_path=db_path, query_text=query_text, top_k=3)]
         for query_text in smoke_queries
     }
-    eval_report = run_eval(db_path=db_path, eval_file=eval_file) if eval_file is not None else None
+    eval_report = (
+        run_eval(
+            db_path=db_path,
+            eval_file=eval_file,
+            with_bundles=with_bundles,
+            bundle_max_tokens=bundle_max_tokens,
+        )
+        if eval_file is not None
+        else None
+    )
     validation_status = _validation_summary_status(eval_report)
     payload = {
         "repo_url": repo_url,

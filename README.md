@@ -314,9 +314,11 @@ The validation payload separates current-run quality from baseline comparison:
 - `overall_status`: `GREEN`, `GREEN_WITH_WARNINGS`, or `NON_GREEN`
 - `retrieval_fully_green`: true only when retrieval has no weak or miss cases
 - `weak_or_miss_present`: true when retrieval is not fully green
-- `bundle_fully_green`: true only when evaluated bundles have no partial or insufficient cases
-- `bundle_non_complete_present`: true when evaluated bundles are not fully green
+- `bundle_fully_green`: true only when bundle evaluation ran and all bundles are `COMPLETE`; otherwise false when any bundle is `PARTIAL` or `INSUFFICIENT`
+- `bundle_non_complete_present`: true only when bundle evaluation ran and any bundle is `PARTIAL` or `INSUFFICIENT`; otherwise false when all bundles are `COMPLETE`
 - `baseline_comparison`: reported separately and left as `not_compared` unless an actual baseline is supplied
+
+When bundle evaluation is not run, the two bundle status fields remain `null`. When bundle results are present, both fields are populated as strict booleans.
 
 This avoids treating “not perfect” as “regressed”. A run with one weak case is a warning state, not a baseline regression.
 

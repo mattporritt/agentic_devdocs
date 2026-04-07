@@ -377,6 +377,64 @@ def test_validation_summary_status_marks_fully_green_run() -> None:
     assert status["bundle_non_complete_present"] is False
 
 
+def test_validation_summary_status_marks_partial_bundles_as_non_green() -> None:
+    report = EvalReport(
+        total_queries=2,
+        strong_passes=2,
+        weak_passes=0,
+        misses=0,
+        top_1=_window(2, 0, 0, 2),
+        top_3=_window(2, 0, 0, 2),
+        top_5=_window(2, 0, 0, 2),
+        outcomes=[],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=2,
+            complete=1,
+            partial=1,
+            insufficient=0,
+            complete_rate=0.5,
+            partial_rate=0.5,
+            insufficient_rate=0.0,
+        ),
+    )
+
+    status = _validation_summary_status(report)
+
+    assert status is not None
+    assert status["bundle_fully_green"] is False
+    assert status["bundle_non_complete_present"] is True
+    assert status["overall_status"] == "GREEN_WITH_WARNINGS"
+
+
+def test_validation_summary_status_marks_insufficient_bundles_as_non_green() -> None:
+    report = EvalReport(
+        total_queries=2,
+        strong_passes=2,
+        weak_passes=0,
+        misses=0,
+        top_1=_window(2, 0, 0, 2),
+        top_3=_window(2, 0, 0, 2),
+        top_5=_window(2, 0, 0, 2),
+        outcomes=[],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=2,
+            complete=1,
+            partial=0,
+            insufficient=1,
+            complete_rate=0.5,
+            partial_rate=0.0,
+            insufficient_rate=0.5,
+        ),
+    )
+
+    status = _validation_summary_status(report)
+
+    assert status is not None
+    assert status["bundle_fully_green"] is False
+    assert status["bundle_non_complete_present"] is True
+    assert status["overall_status"] == "GREEN_WITH_WARNINGS"
+
+
 def test_validation_summary_status_marks_misses_as_non_green() -> None:
     report = EvalReport(
         total_queries=2,
@@ -470,7 +528,12 @@ def test_cli_verify_devdocs_runs_eval_sequentially_and_records_cleanliness(
     assert payload["eval"]["outcomes"][0]["case_id"] == "forms-validation"
     assert payload["eval"]["outcomes"][0]["grade"] == "STRONG PASS"
     assert "regression_detected" not in payload
-    assert payload["validation_status"]["overall_status"] == "GREEN"
     assert payload["validation_status"]["retrieval_fully_green"] is True
     assert payload["validation_status"]["weak_or_miss_present"] is False
+    assert payload["validation_status"]["bundle_fully_green"] is (
+        payload["eval"]["bundle_overall"]["partial"] == 0 and payload["eval"]["bundle_overall"]["insufficient"] == 0
+    )
+    assert payload["validation_status"]["bundle_non_complete_present"] is (
+        payload["eval"]["bundle_overall"]["partial"] > 0 or payload["eval"]["bundle_overall"]["insufficient"] > 0
+    )
     assert payload["validation_status"]["baseline_comparison"]["status"] == "not_compared"
