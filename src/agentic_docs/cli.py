@@ -55,6 +55,44 @@ def _validation_worktree_payload(repo_path: Path, allow_dirty: bool) -> dict[str
     return payload
 
 
+def _validation_summary_status(eval_report: object | None) -> dict[str, object] | None:
+    """Describe current-run validation quality without implying a baseline regression."""
+
+    if eval_report is None:
+        return None
+
+    retrieval_fully_green = eval_report.weak_passes == 0 and eval_report.misses == 0
+    weak_or_miss_present = eval_report.weak_passes > 0 or eval_report.misses > 0
+
+    bundle_overall = eval_report.bundle_overall
+    bundle_fully_green = None
+    bundle_non_complete_present = None
+    if bundle_overall is not None:
+        bundle_fully_green = bundle_overall.partial == 0 and bundle_overall.insufficient == 0
+        bundle_non_complete_present = bundle_overall.partial > 0 or bundle_overall.insufficient > 0
+
+    if eval_report.misses > 0:
+        overall_status = "NON_GREEN"
+    elif weak_or_miss_present or bundle_non_complete_present:
+        overall_status = "GREEN_WITH_WARNINGS"
+    else:
+        overall_status = "GREEN"
+
+    return {
+        "overall_status": overall_status,
+        "retrieval_fully_green": retrieval_fully_green,
+        "weak_or_miss_present": weak_or_miss_present,
+        "bundle_fully_green": bundle_fully_green,
+        "bundle_non_complete_present": bundle_non_complete_present,
+        "baseline_comparison": {
+            "status": "not_compared",
+            "baseline_provided": False,
+            "regressed": None,
+            "improved": None,
+        },
+    }
+
+
 @app.command()
 def sync(
     repo_url: Annotated[str, typer.Option(help="Git repository URL to sync.")],
@@ -270,6 +308,7 @@ def verify_devdocs(
         for query_text in smoke_queries
     }
     eval_report = run_eval(db_path=db_path, eval_file=eval_file) if eval_file is not None else None
+    validation_status = _validation_summary_status(eval_report)
     payload = {
         "repo_url": repo_url,
         "local_path": str(local_path),
@@ -280,7 +319,7 @@ def verify_devdocs(
         "stats": SQLiteStore(db_path).detailed_stats(limit=5),
         "smoke_queries": smoke_results,
         "eval": eval_report.model_dump() if eval_report is not None else None,
-        "regression_detected": (eval_report.misses > 0 or eval_report.weak_passes > 0) if eval_report is not None else None,
+        "validation_status": validation_status,
     }
     _emit(payload, json_output)
 

@@ -309,6 +309,17 @@ Useful flags:
 - `--eval-file`: run the strict eval as part of the same sequential validation workflow
 - `--allow-dirty`: override the clean-worktree requirement, while recording that the run came from a dirty tree
 
+The validation payload separates current-run quality from baseline comparison:
+
+- `overall_status`: `GREEN`, `GREEN_WITH_WARNINGS`, or `NON_GREEN`
+- `retrieval_fully_green`: true only when retrieval has no weak or miss cases
+- `weak_or_miss_present`: true when retrieval is not fully green
+- `bundle_fully_green`: true only when evaluated bundles have no partial or insufficient cases
+- `bundle_non_complete_present`: true when evaluated bundles are not fully green
+- `baseline_comparison`: reported separately and left as `not_compared` unless an actual baseline is supplied
+
+This avoids treating “not perfect” as “regressed”. A run with one weak case is a warning state, not a baseline regression.
+
 ### `eval`
 
 Run the lightweight retrieval evaluation harness.

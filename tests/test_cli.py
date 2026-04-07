@@ -4,10 +4,21 @@ from pathlib import Path
 import pytest
 from typer.testing import CliRunner
 
-from agentic_docs.cli import _validation_worktree_payload, app
+from agentic_docs.cli import _validation_summary_status, _validation_worktree_payload, app
+from agentic_docs.models import BundleGradeStats, EvalReport, EvalWindowStats
 
 
 runner = CliRunner()
+
+
+def _window(strong: int, weak: int, misses: int, total: int) -> EvalWindowStats:
+    return EvalWindowStats(
+        strong_passes=strong,
+        weak_passes=weak,
+        misses=misses,
+        strong_pass_rate=strong / total if total else 0.0,
+        weak_pass_rate=weak / total if total else 0.0,
+    )
 
 
 def test_cli_ingest_and_query(tmp_path: Path) -> None:
@@ -302,6 +313,93 @@ def test_validation_worktree_payload_allows_dirty_override(monkeypatch: pytest.M
     assert payload["status_lines"] == [" M README.md"]
 
 
+def test_validation_summary_status_distinguishes_warnings_from_regression() -> None:
+    report = EvalReport(
+        total_queries=3,
+        strong_passes=2,
+        weak_passes=1,
+        misses=0,
+        top_1=_window(2, 1, 0, 3),
+        top_3=_window(2, 1, 0, 3),
+        top_5=_window(2, 1, 0, 3),
+        outcomes=[],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=3,
+            complete=3,
+            partial=0,
+            insufficient=0,
+            complete_rate=1.0,
+            partial_rate=0.0,
+            insufficient_rate=0.0,
+        ),
+    )
+
+    status = _validation_summary_status(report)
+
+    assert status is not None
+    assert status["overall_status"] == "GREEN_WITH_WARNINGS"
+    assert status["retrieval_fully_green"] is False
+    assert status["weak_or_miss_present"] is True
+    assert status["bundle_fully_green"] is True
+    assert status["bundle_non_complete_present"] is False
+    assert status["baseline_comparison"]["status"] == "not_compared"
+    assert status["baseline_comparison"]["regressed"] is None
+
+
+def test_validation_summary_status_marks_fully_green_run() -> None:
+    report = EvalReport(
+        total_queries=2,
+        strong_passes=2,
+        weak_passes=0,
+        misses=0,
+        top_1=_window(2, 0, 0, 2),
+        top_3=_window(2, 0, 0, 2),
+        top_5=_window(2, 0, 0, 2),
+        outcomes=[],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=2,
+            complete=2,
+            partial=0,
+            insufficient=0,
+            complete_rate=1.0,
+            partial_rate=0.0,
+            insufficient_rate=0.0,
+        ),
+    )
+
+    status = _validation_summary_status(report)
+
+    assert status is not None
+    assert status["overall_status"] == "GREEN"
+    assert status["retrieval_fully_green"] is True
+    assert status["weak_or_miss_present"] is False
+    assert status["bundle_fully_green"] is True
+    assert status["bundle_non_complete_present"] is False
+
+
+def test_validation_summary_status_marks_misses_as_non_green() -> None:
+    report = EvalReport(
+        total_queries=2,
+        strong_passes=1,
+        weak_passes=0,
+        misses=1,
+        top_1=_window(1, 0, 1, 2),
+        top_3=_window(1, 0, 1, 2),
+        top_5=_window(1, 0, 1, 2),
+        outcomes=[],
+        bundle_overall=None,
+    )
+
+    status = _validation_summary_status(report)
+
+    assert status is not None
+    assert status["overall_status"] == "NON_GREEN"
+    assert status["retrieval_fully_green"] is False
+    assert status["weak_or_miss_present"] is True
+    assert status["bundle_fully_green"] is None
+    assert status["bundle_non_complete_present"] is None
+
+
 def test_cli_verify_devdocs_runs_eval_sequentially_and_records_cleanliness(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -371,4 +469,8 @@ def test_cli_verify_devdocs_runs_eval_sequentially_and_records_cleanliness(
     assert payload["eval"]["misses"] == 0
     assert payload["eval"]["outcomes"][0]["case_id"] == "forms-validation"
     assert payload["eval"]["outcomes"][0]["grade"] == "STRONG PASS"
-    assert payload["regression_detected"] is False
+    assert "regression_detected" not in payload
+    assert payload["validation_status"]["overall_status"] == "GREEN"
+    assert payload["validation_status"]["retrieval_fully_green"] is True
+    assert payload["validation_status"]["weak_or_miss_present"] is False
+    assert payload["validation_status"]["baseline_comparison"]["status"] == "not_compared"
