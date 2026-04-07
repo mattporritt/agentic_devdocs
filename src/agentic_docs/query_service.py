@@ -722,6 +722,14 @@ def build_context_bundles(
                 snippet=result.snippet,
                 chunks=ordered_chunks,
                 selection_strategy=selection_strategy,
+                diagnostics={
+                    "bundle_max_tokens": bundle_max_tokens,
+                    "within_budget": bundle_max_tokens <= 0 or total_tokens <= bundle_max_tokens,
+                    "chunk_count": len(ordered_chunks),
+                    "chunk_roles": [chunk.role for chunk in ordered_chunks],
+                    "truncated": selection_strategy == "truncated_match",
+                    "duplicate_chunk_count": _bundle_duplicate_count(ordered_chunks),
+                },
             )
         )
     return bundles
@@ -739,3 +747,15 @@ def _truncate_text_to_tokens(content: str, max_tokens: int, tokenizer) -> str:
     if len(encoded) <= max_tokens:
         return content
     return tokenizer.decode(encoded[:max_tokens]).strip()
+
+
+def _bundle_duplicate_count(chunks: list[ContextBundleChunk]) -> int:
+    seen: set[str] = set()
+    duplicates = 0
+    for chunk in chunks:
+        normalized = " ".join(chunk.content.lower().split())
+        if normalized in seen:
+            duplicates += 1
+            continue
+        seen.add(normalized)
+    return duplicates

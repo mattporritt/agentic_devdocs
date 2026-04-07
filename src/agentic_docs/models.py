@@ -109,6 +109,7 @@ class ContextBundle(BaseModel):
     snippet: str | None = None
     chunks: list[ContextBundleChunk]
     selection_strategy: str = "match_only"
+    diagnostics: dict[str, Any] | None = None
 
 
 class EvalCase(BaseModel):
@@ -124,6 +125,10 @@ class EvalCase(BaseModel):
     preferred_heading_substrings: list[str] = Field(default_factory=list)
     acceptable_heading_substrings: list[str] = Field(default_factory=list)
     disallowed_document_paths: list[str] = Field(default_factory=list)
+    preferred_bundle_paths: list[str] = Field(default_factory=list)
+    preferred_heading_substrings_for_bundle: list[str] = Field(default_factory=list)
+    required_heading_substrings_for_bundle: list[str] = Field(default_factory=list)
+    max_reasonable_bundle_tokens: int | None = None
     top_k: int = 5
     notes: str | None = None
 
@@ -179,6 +184,16 @@ class EvalOutcome(BaseModel):
     preferred_result_path: str | None = None
     preferred_result_heading: str | None = None
     ranking_diagnostic: str | None = None
+    bundle_grade: str | None = None
+    bundle_path: str | None = None
+    bundle_token_count: int | None = None
+    bundle_chunk_count: int | None = None
+    bundle_selection_strategy: str | None = None
+    bundle_within_budget: bool | None = None
+    bundle_matched_path: bool | None = None
+    bundle_required_headings_present: list[str] = Field(default_factory=list)
+    bundle_required_headings_missing: list[str] = Field(default_factory=list)
+    bundle_diagnostic: str | None = None
 
 
 class EvalReport(BaseModel):
@@ -193,6 +208,8 @@ class EvalReport(BaseModel):
     top_5: EvalWindowStats
     buckets: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
     concepts: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
+    bundle_overall: "BundleGradeStats | None" = None
+    bundle_buckets: dict[str, "BundleGradeStats"] = Field(default_factory=dict)
     outcomes: list[EvalOutcome]
 
 
@@ -208,3 +225,15 @@ class EvalGroupReport(BaseModel):
     top_3: EvalWindowStats
     top_5: EvalWindowStats
     case_ids: list[str] = Field(default_factory=list)
+
+
+class BundleGradeStats(BaseModel):
+    """Aggregate usefulness report for context bundles."""
+
+    total_evaluated: int
+    complete: int
+    partial: int
+    insufficient: int
+    complete_rate: float
+    partial_rate: float
+    insufficient_rate: float

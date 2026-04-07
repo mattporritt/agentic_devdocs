@@ -6,15 +6,21 @@ It is built to answer a practical question: when an agent is working on Moodle L
 
 The current phase focuses on three things:
 
-- concept-aware ranking improvements over the FTS5 candidate set
-- section-level preference for the best explanatory section over broader matches
-- weak-pass diagnostics that make retrieval tuning more actionable
+- concept-aware retrieval that can surface the right explanatory section
+- compact context bundles that are useful to downstream coding agents
+- bundle and retrieval diagnostics that make tuning more actionable
 
 The current evaluation flow is intentionally stricter than earlier iterations:
 
 - `STRONG PASS` means retrieval found a clearly correct target
 - `WEAK PASS` means retrieval found a related fallback but not the best target
 - `MISS` means retrieval failed to surface an acceptably correct target within the configured top-k
+
+Bundle usefulness is now graded separately:
+
+- `COMPLETE` means the returned bundle contains the key explanatory section, stays reasonably compact, and is usable as-is
+- `PARTIAL` means the bundle is usable but thin, noisy, truncated, or otherwise suboptimal
+- `INSUFFICIENT` means the bundle is missing critical context or is not practically usable for an agent
 
 ## Why this exists
 
@@ -180,6 +186,7 @@ agentic-docs query \
   --context-bundle \
   --include-next \
   --bundle-max-tokens 350 \
+  --explain-bundle \
   --json
 ```
 
@@ -188,7 +195,9 @@ Run the starter retrieval evaluation set:
 ```bash
 agentic-docs eval \
   --db-path ./_data/devdocs.db \
-  --eval-file ./evals/moodle_devdocs_eval.yaml
+  --eval-file ./evals/moodle_devdocs_eval.yaml \
+  --with-bundles \
+  --show-bundle-details
 ```
 
 ## CLI commands
@@ -232,6 +241,7 @@ Useful flags:
 - `--include-next`: include the next chunk in the bundle
 - `--bundle-max-tokens`: cap the context bundle size, truncating oversize matches if necessary
 - `--explain-ranking`: include the explicit reranking score breakdown
+- `--explain-bundle`: include bundle diagnostics such as budget fit, chunk roles, and truncation
 - `--json`: machine-readable output
 
 Returned data includes:
@@ -313,9 +323,12 @@ The eval command reports:
 - strong pass, weak pass, and miss counts
 - top-1, top-3, and top-5 strong-pass rates
 - top-1, top-3, and top-5 weak-pass rates
+- bundle complete / partial / insufficient counts and rates when `--with-bundles` is enabled
 - per-query strong pass / weak pass / miss
+- per-query bundle usefulness grade when enabled
 - the highest-ranked matching result
 - preferred-result rank and ranking diagnostics for weak passes when requested
+- bundle diagnostics for missing headings, oversize bundles, or thin/noisy context when requested
 - failure summaries for misses
 
 Use `--json` for machine-readable output suitable for automation or later comparison between runs.
@@ -416,6 +429,7 @@ Each case still uses explicit grading targets:
 - `disallowed_document_paths` for obviously wrong-but-lexically-close results
 - `bucket` to group related areas such as testing, privacy, output/rendering, or upgrade/schema work
 - `concept_id` to group multiple query phrasings for the same underlying task
+- `required_heading_substrings_for_bundle` and `max_reasonable_bundle_tokens` for explicit bundle usefulness checks
 
 It covers representative questions such as:
 
@@ -445,9 +459,11 @@ The report exposes:
 - misses
 - bucket-level breakdowns
 - concept-level breakdowns across related phrasings
+- bundle bucket breakdowns when bundle evaluation is enabled
 - matched rule type and matched result rank per query
 - preferred-result rank when a better target was retrieved but ranked too low
 - concise ranking diagnostics for weak passes and ranking misses
+- concise bundle diagnostics explaining why a bundle was complete, partial, or insufficient
 
 This keeps failures understandable and easy to tune against.
 
@@ -483,6 +499,14 @@ Bundles are assembled conservatively:
 - same-section adjacent chunks are added only when explicitly requested and they still fit the budget
 - repeated heading prefixes are stripped from adjacent context to reduce prompt noise
 
+Bundle usefulness is now measured explicitly in eval runs. The current heuristics are deliberately simple and inspectable:
+
+- `COMPLETE`: preferred bundle path present, required headings present when specified, and bundle remains within budget
+- `PARTIAL`: key section is present but the bundle is truncated, too thin, slightly over budget, or otherwise fallback-quality
+- `INSUFFICIENT`: critical required heading is missing, no usable bundle was produced, or the bundle is significantly over budget
+
+This lets the benchmark expose cases where retrieval is already strong but the returned context package is still weak for an agent.
+
 This is still intentionally simple. It is not a full prompt-assembly system, but it is a practical bridge toward agent-ready retrieval.
 
 ## Inspecting Weak Passes
@@ -501,12 +525,19 @@ and:
 agentic-docs query "How do events work in plugins?" --db-path <path> --top-k 5 --explain-ranking --json
 ```
 
+and for bundle usefulness:
+
+```bash
+agentic-docs eval --db-path <path> --eval-file ./evals/moodle_devdocs_eval.yaml --with-bundles --show-bundle-details
+```
+
 These diagnostics show:
 
 - the actual top-ranked result
 - the preferred-result rank if a better target was already retrieved
 - the explicit score breakdown that made one result outrank another
 - whether the remaining issue is broad-page dominance, plugin-type noise, or weak lexical evidence
+- whether a bundle missed a required heading, exceeded budget, or stayed too thin to be fully useful
 
 ## MDX Noise Reduction
 
@@ -540,6 +571,7 @@ Coverage currently includes:
 - query normalization and context bundles
 - canonical-doc preference
 - strict eval file loading and strong/weak/miss scoring
+- bundle usefulness grading and reporting
 - field-aware reranking and explanation output
 - weak-pass diagnostics
 - CLI ingest/query/eval sanity
@@ -550,6 +582,7 @@ Coverage currently includes:
 - The markdown parser extracts section structure generically and does not yet add deeper Moodle-specific enrichment.
 - Anthropic support is designed for via the tokenizer abstraction, but only the OpenAI/tiktoken adapter is implemented.
 - Evaluation matching is still substring-based and intentionally explicit; it is stricter than before, but still not semantic understanding.
+- Context bundle usefulness is judged by explicit heuristics, not model-based quality judgments.
 - Context bundles are compact retrieval packages, not yet full prompt construction.
 - Canonical-doc preference and MDX cleanup are conservative heuristics rather than full corpus normalization.
 - Field-aware ranking is hand-tuned and inspectable, not learned; expect more iteration as weak passes change.

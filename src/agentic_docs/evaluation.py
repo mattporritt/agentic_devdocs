@@ -9,6 +9,8 @@ from textwrap import dedent
 import yaml
 
 from agentic_docs.models import (
+    BundleGradeStats,
+    ContextBundle,
     EvalCase,
     EvalGroupReport,
     EvalMatch,
@@ -17,7 +19,7 @@ from agentic_docs.models import (
     EvalWindowStats,
     QueryResult,
 )
-from agentic_docs.query_service import canonical_path_key, query_chunks
+from agentic_docs.query_service import build_context_bundles, canonical_path_key, query_chunks
 
 
 def load_eval_cases(eval_file: Path) -> list[EvalCase]:
@@ -48,6 +50,12 @@ def _matches_any(substrings: list[str], haystacks: list[str]) -> list[str]:
     return matches
 
 
+def _matching_paths(expected_paths: list[str], actual_path: str) -> list[str]:
+    lowered_path = actual_path.lower()
+    lowered_canonical = canonical_path_key(lowered_path)
+    return _matches_any(expected_paths, [lowered_path, lowered_canonical])
+
+
 def _grade_result(case: EvalCase, result: QueryResult) -> tuple[str, list[str], str | None]:
     lower_path = result.source_file_path.lower()
     heading_text = " > ".join(result.heading_path).lower()
@@ -59,8 +67,8 @@ def _grade_result(case: EvalCase, result: QueryResult) -> tuple[str, list[str], 
     if disallowed_paths:
         return "MISS", [f"disallowed_path:{path}" for path in disallowed_paths], None
 
-    preferred_paths = _matches_any(case.preferred_document_paths, [lower_path, canonical_path_key(lower_path)])
-    acceptable_paths = _matches_any(case.acceptable_document_paths, [lower_path, canonical_path_key(lower_path)])
+    preferred_paths = _matching_paths(case.preferred_document_paths, lower_path)
+    acceptable_paths = _matching_paths(case.acceptable_document_paths, lower_path)
     preferred_headings = _matches_any(case.preferred_heading_substrings, haystacks)
     acceptable_headings = _matches_any(case.acceptable_heading_substrings, haystacks)
 
@@ -79,6 +87,127 @@ def _grade_result(case: EvalCase, result: QueryResult) -> tuple[str, list[str], 
         return "WEAK PASS", matched_on, rule_type
 
     return "MISS", [], None
+
+
+def _bundle_expected_paths(case: EvalCase) -> list[str]:
+    return case.preferred_bundle_paths or case.preferred_document_paths or case.acceptable_document_paths
+
+
+def _bundle_expected_headings(case: EvalCase) -> list[str]:
+    preferred = case.preferred_heading_substrings_for_bundle or case.preferred_heading_substrings
+    required = case.required_heading_substrings_for_bundle
+    combined: list[str] = []
+    for heading in preferred + required:
+        if heading not in combined:
+            combined.append(heading)
+    return combined
+
+
+def _bundle_haystacks(bundle: ContextBundle) -> list[str]:
+    heading_text = " > ".join(bundle.heading_path).lower()
+    chunk_text = "\n\n".join(chunk.content for chunk in bundle.chunks).lower()
+    return [
+        bundle.source_file_path.lower(),
+        bundle.document_title.lower(),
+        (bundle.section_title or "").lower(),
+        heading_text,
+        chunk_text,
+    ]
+
+
+def _bundle_redundancy_count(bundle: ContextBundle) -> int:
+    seen: set[str] = set()
+    duplicates = 0
+    for chunk in bundle.chunks:
+        normalized = " ".join(chunk.content.lower().split())
+        if normalized in seen:
+            duplicates += 1
+            continue
+        seen.add(normalized)
+    return duplicates
+
+
+def _bundle_budget(case: EvalCase, bundle_max_tokens: int) -> int:
+    if case.max_reasonable_bundle_tokens is not None:
+        return case.max_reasonable_bundle_tokens
+    return bundle_max_tokens
+
+
+def _grade_bundle(
+    case: EvalCase,
+    bundle: ContextBundle | None,
+    retrieval_grade: str,
+    bundle_max_tokens: int,
+    evaluate_bundle: bool,
+) -> tuple[str | None, dict[str, object]]:
+    if not evaluate_bundle:
+        return None, {}
+    if bundle is None:
+        return "INSUFFICIENT", {"bundle_diagnostic": "no context bundle was produced"}
+
+    budget = _bundle_budget(case, bundle_max_tokens)
+    expected_paths = _bundle_expected_paths(case)
+    required_headings = case.required_heading_substrings_for_bundle
+    preferred_headings = _bundle_expected_headings(case)
+    haystacks = _bundle_haystacks(bundle)
+    matched_paths = _matching_paths(expected_paths, bundle.source_file_path)
+    required_present = _matches_any(required_headings, haystacks)
+    preferred_present = _matches_any(preferred_headings, haystacks)
+    missing_required = [heading for heading in required_headings if heading not in required_present]
+    within_budget = budget <= 0 or bundle.bundle_token_count <= budget
+    far_over_budget = budget > 0 and bundle.bundle_token_count > int(budget * 1.35)
+    redundancy_count = _bundle_redundancy_count(bundle)
+    chunk_count = len(bundle.chunks)
+    too_thin = bundle.bundle_token_count < 40
+    truncated = bundle.selection_strategy == "truncated_match"
+
+    diagnostic_parts: list[str] = []
+    if matched_paths:
+        diagnostic_parts.append("bundle path matched preferred target")
+    elif expected_paths:
+        diagnostic_parts.append("bundle path did not match preferred target")
+    if required_present:
+        diagnostic_parts.append(f"required headings present: {', '.join(required_present)}")
+    if missing_required:
+        diagnostic_parts.append(f"missing required headings: {', '.join(missing_required)}")
+    if not within_budget:
+        diagnostic_parts.append(f"bundle exceeded token budget ({bundle.bundle_token_count}>{budget})")
+    if redundancy_count:
+        diagnostic_parts.append(f"bundle contains {redundancy_count} duplicate chunk(s)")
+    if too_thin:
+        diagnostic_parts.append("bundle is very small")
+    if truncated:
+        diagnostic_parts.append("bundle was truncated to fit the budget")
+
+    if retrieval_grade == "MISS":
+        grade = "INSUFFICIENT"
+    elif missing_required:
+        grade = "INSUFFICIENT"
+    elif far_over_budget:
+        grade = "INSUFFICIENT"
+    elif expected_paths and not matched_paths:
+        grade = "PARTIAL"
+    elif too_thin or truncated or redundancy_count > 0 or not within_budget:
+        grade = "PARTIAL"
+    elif preferred_headings and not preferred_present:
+        grade = "PARTIAL"
+    else:
+        grade = "COMPLETE"
+
+    if not diagnostic_parts:
+        diagnostic_parts.append("bundle contained the primary section within budget")
+
+    return grade, {
+        "bundle_path": bundle.source_file_path,
+        "bundle_token_count": bundle.bundle_token_count,
+        "bundle_chunk_count": chunk_count,
+        "bundle_selection_strategy": bundle.selection_strategy,
+        "bundle_within_budget": within_budget,
+        "bundle_matched_path": bool(matched_paths),
+        "bundle_required_headings_present": required_present,
+        "bundle_required_headings_missing": missing_required,
+        "bundle_diagnostic": "; ".join(diagnostic_parts),
+    }
 
 
 def _failure_summary(case: EvalCase, results: list[QueryResult]) -> str:
@@ -122,7 +251,13 @@ def _ranking_diagnostic(
     return None
 
 
-def _score_case(case: EvalCase, results: list[QueryResult]) -> EvalOutcome:
+def _score_case(
+    case: EvalCase,
+    results: list[QueryResult],
+    bundle: ContextBundle | None = None,
+    bundle_max_tokens: int = 0,
+    evaluate_bundle: bool = False,
+) -> EvalOutcome:
     matched_result: EvalMatch | None = None
     matched_rank: int | None = None
     preferred_result: EvalMatch | None = None
@@ -164,6 +299,8 @@ def _score_case(case: EvalCase, results: list[QueryResult]) -> EvalOutcome:
     weak_pass_top_3 = grade == "WEAK PASS" and matched_rank is not None and matched_rank <= 3
     weak_pass_top_5 = grade == "WEAK PASS" and matched_rank is not None and matched_rank <= 5
 
+    bundle_grade, bundle_details = _grade_bundle(case, bundle, grade, bundle_max_tokens, evaluate_bundle)
+
     return EvalOutcome(
         case_id=case.id,
         query=case.query,
@@ -187,6 +324,16 @@ def _score_case(case: EvalCase, results: list[QueryResult]) -> EvalOutcome:
         preferred_result_path=preferred_result.source_file_path if preferred_result else None,
         preferred_result_heading=" > ".join(preferred_result.heading_path) if preferred_result else None,
         ranking_diagnostic=_ranking_diagnostic(grade, matched_rank, preferred_result, results),
+        bundle_grade=bundle_grade,
+        bundle_path=bundle_details.get("bundle_path"),
+        bundle_token_count=bundle_details.get("bundle_token_count"),
+        bundle_chunk_count=bundle_details.get("bundle_chunk_count"),
+        bundle_selection_strategy=bundle_details.get("bundle_selection_strategy"),
+        bundle_within_budget=bundle_details.get("bundle_within_budget"),
+        bundle_matched_path=bundle_details.get("bundle_matched_path"),
+        bundle_required_headings_present=bundle_details.get("bundle_required_headings_present", []),
+        bundle_required_headings_missing=bundle_details.get("bundle_required_headings_missing", []),
+        bundle_diagnostic=bundle_details.get("bundle_diagnostic"),
     )
 
 
@@ -229,6 +376,8 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
             top_5=empty_window,
             buckets={},
             concepts={},
+            bundle_overall=None,
+            bundle_buckets={},
             outcomes=[],
         )
 
@@ -241,6 +390,8 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
         key_fn=lambda outcome: outcome.concept_id,
         include_empty=False,
     )
+    bundle_overall = _bundle_stats(outcomes)
+    bundle_buckets = _bundle_group_stats(outcomes, key_fn=lambda outcome: outcome.bucket)
     return EvalReport(
         total_queries=total,
         strong_passes=strong_passes,
@@ -251,8 +402,44 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
         top_5=_window_stats(outcomes, 5),
         buckets=buckets,
         concepts=concepts,
+        bundle_overall=bundle_overall,
+        bundle_buckets=bundle_buckets,
         outcomes=outcomes,
     )
+
+
+def _bundle_stats(outcomes: list[EvalOutcome]) -> BundleGradeStats | None:
+    graded = [outcome for outcome in outcomes if outcome.bundle_grade is not None]
+    if not graded:
+        return None
+    total = len(graded)
+    complete = sum(1 for outcome in graded if outcome.bundle_grade == "COMPLETE")
+    partial = sum(1 for outcome in graded if outcome.bundle_grade == "PARTIAL")
+    insufficient = total - complete - partial
+    return BundleGradeStats(
+        total_evaluated=total,
+        complete=complete,
+        partial=partial,
+        insufficient=insufficient,
+        complete_rate=complete / total,
+        partial_rate=partial / total,
+        insufficient_rate=insufficient / total,
+    )
+
+
+def _bundle_group_stats(outcomes: list[EvalOutcome], key_fn) -> dict[str, BundleGradeStats]:
+    grouped: dict[str, list[EvalOutcome]] = {}
+    for outcome in outcomes:
+        if outcome.bundle_grade is None:
+            continue
+        label = str(key_fn(outcome) or "uncategorized")
+        grouped.setdefault(label, []).append(outcome)
+    reports: dict[str, BundleGradeStats] = {}
+    for label, grouped_outcomes in sorted(grouped.items()):
+        stats = _bundle_stats(grouped_outcomes)
+        if stats is not None:
+            reports[label] = stats
+    return reports
 
 
 def _group_reports(
@@ -314,12 +501,32 @@ def render_eval_text(report: EvalReport, show_weak_details: bool = False) -> str
         f"top_5_weak_pass_rate: {report.top_5.weak_pass_rate:.3f}",
         "",
     ]
+    if report.bundle_overall is not None:
+        lines.extend(
+            [
+                f"bundle_complete: {report.bundle_overall.complete}",
+                f"bundle_partial: {report.bundle_overall.partial}",
+                f"bundle_insufficient: {report.bundle_overall.insufficient}",
+                f"bundle_complete_rate: {report.bundle_overall.complete_rate:.3f}",
+                f"bundle_partial_rate: {report.bundle_overall.partial_rate:.3f}",
+                f"bundle_insufficient_rate: {report.bundle_overall.insufficient_rate:.3f}",
+                "",
+            ]
+        )
     if report.buckets:
         lines.append("bucket_summary:")
         for bucket, bucket_report in report.buckets.items():
             lines.append(
                 f"  {bucket}: strong={bucket_report.strong_passes} weak={bucket_report.weak_passes} "
                 f"miss={bucket_report.misses} top_1_strong={bucket_report.top_1.strong_pass_rate:.3f}"
+            )
+        lines.append("")
+    if report.bundle_buckets:
+        lines.append("bundle_bucket_summary:")
+        for bucket, bucket_report in report.bundle_buckets.items():
+            lines.append(
+                f"  {bucket}: complete={bucket_report.complete} partial={bucket_report.partial} "
+                f"insufficient={bucket_report.insufficient} complete_rate={bucket_report.complete_rate:.3f}"
             )
         lines.append("")
     if report.concepts:
@@ -345,6 +552,13 @@ def render_eval_text(report: EvalReport, show_weak_details: bool = False) -> str
             )
         if show_weak_details and outcome.ranking_diagnostic:
             lines.append(f"  ranking={outcome.ranking_diagnostic}")
+        if outcome.bundle_grade is not None:
+            lines.append(
+                f"  bundle_grade={outcome.bundle_grade} path={outcome.bundle_path} "
+                f"tokens={outcome.bundle_token_count} strategy={outcome.bundle_selection_strategy}"
+            )
+        if show_weak_details and outcome.bundle_diagnostic:
+            lines.append(f"  bundle={outcome.bundle_diagnostic}")
         if outcome.failure_summary:
             lines.append(f"  failure={outcome.failure_summary}")
     return "\n".join(lines)
@@ -371,6 +585,17 @@ def render_eval_summary_markdown(report: EvalReport) -> str:
         """
     ).strip()
 
+    if report.bundle_overall is not None:
+        summary = "\n".join(
+            [
+                summary,
+                f"- Bundle complete: `{report.bundle_overall.complete}`",
+                f"- Bundle partial: `{report.bundle_overall.partial}`",
+                f"- Bundle insufficient: `{report.bundle_overall.insufficient}`",
+                f"- Bundle complete rate: `{report.bundle_overall.complete_rate:.3f}`",
+            ]
+        )
+
     if report.buckets:
         lines = [summary, "", "## Buckets", ""]
         for bucket, bucket_report in report.buckets.items():
@@ -385,18 +610,50 @@ def render_eval_summary_markdown(report: EvalReport) -> str:
                     f"- Concept `{concept}`: `{concept_report.strong_passes}` strong / `{concept_report.weak_passes}` weak / "
                     f"`{concept_report.misses}` miss across `{concept_report.total_queries}` queries"
                 )
+        if report.bundle_buckets:
+            lines.extend(["", "## Bundle Buckets", ""])
+            for bucket, bucket_report in report.bundle_buckets.items():
+                lines.append(
+                    f"- Bundle bucket `{bucket}`: `{bucket_report.complete}` complete / `{bucket_report.partial}` partial / "
+                    f"`{bucket_report.insufficient}` insufficient, complete `{bucket_report.complete_rate:.3f}`"
+                )
         return "\n".join(lines)
     return summary
 
 
-def run_eval(db_path: Path, eval_file: Path) -> EvalReport:
+def run_eval(
+    db_path: Path,
+    eval_file: Path,
+    with_bundles: bool = False,
+    bundle_max_tokens: int = 450,
+    include_previous: bool = True,
+    include_next: bool = True,
+) -> EvalReport:
     """Run retrieval evaluation over the configured set of queries."""
 
     cases = load_eval_cases(eval_file)
     outcomes: list[EvalOutcome] = []
     for case in cases:
         results = query_chunks(db_path=db_path, query_text=case.query, top_k=max(case.top_k, 5))
-        outcomes.append(_score_case(case, results))
+        bundle = None
+        if with_bundles and results:
+            bundles = build_context_bundles(
+                db_path=db_path,
+                results=results[:1],
+                include_previous=include_previous,
+                include_next=include_next,
+                bundle_max_tokens=case.max_reasonable_bundle_tokens or bundle_max_tokens,
+            )
+            bundle = bundles[0] if bundles else None
+        outcomes.append(
+            _score_case(
+                case,
+                results,
+                bundle=bundle,
+                bundle_max_tokens=bundle_max_tokens,
+                evaluate_bundle=with_bundles,
+            )
+        )
     report = _build_report(outcomes)
     assert_report_consistent(report)
     return report

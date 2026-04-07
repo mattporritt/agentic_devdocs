@@ -32,6 +32,9 @@ def test_load_eval_cases_from_yaml(tmp_path: Path) -> None:
                 "      - docs/apis.md",
                 "    preferred_heading_substrings:",
                 "      - Admin settings",
+                "    required_heading_substrings_for_bundle:",
+                "      - settings.php",
+                "    max_reasonable_bundle_tokens: 220",
             ]
         ),
         encoding="utf-8",
@@ -45,6 +48,8 @@ def test_load_eval_cases_from_yaml(tmp_path: Path) -> None:
     assert cases[0].concept_id == "admin-settings"
     assert cases[0].preferred_heading_substrings == ["Admin settings"]
     assert cases[0].acceptable_document_paths == ["docs/apis.md"]
+    assert cases[0].required_heading_substrings_for_bundle == ["settings.php"]
+    assert cases[0].max_reasonable_bundle_tokens == 220
 
 
 def test_run_eval_scores_hits(tmp_path: Path) -> None:
@@ -287,6 +292,176 @@ def test_eval_renderers_share_single_source_of_truth(tmp_path: Path) -> None:
     assert "admin-settings" in json_payload["concepts"]
     assert "Bucket `plugin-structure`" in summary_output
     assert "Concept `admin-settings`" in summary_output
+
+
+def test_run_eval_with_bundles_reports_complete_and_bucket_stats(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "admin.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "## Admin settings\n\n"
+        "Use settings.php to add plugin settings and describe each setting clearly. "
+        "Document the settings tree, the admin category, and any defaults so plugin maintainers can follow the pattern reliably.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=120, overlap_tokens=10)
+
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: admin-settings",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
+                "    query: How do I add admin settings for a plugin?",
+                "    preferred_document_paths:",
+                "      - admin.md",
+                "    required_heading_substrings_for_bundle:",
+                "      - settings.php",
+                "    max_reasonable_bundle_tokens: 220",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_eval(db_path=db_path, eval_file=eval_file, with_bundles=True, bundle_max_tokens=220)
+
+    assert report.outcomes[0].grade == "STRONG PASS"
+    assert report.outcomes[0].bundle_grade == "COMPLETE"
+    assert report.bundle_overall is not None
+    assert report.bundle_overall.complete == 1
+    assert report.bundle_buckets["plugin-structure"].complete == 1
+
+
+def test_run_eval_with_bundles_can_report_partial_for_truncated_bundle(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "admin.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "## Admin settings\n\n"
+        + ("Use settings.php to add plugin settings with explanatory details. " * 40),
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=200, overlap_tokens=10)
+
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: admin-settings",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
+                "    query: How do I add admin settings for a plugin?",
+                "    preferred_document_paths:",
+                "      - admin.md",
+                "    required_heading_substrings_for_bundle:",
+                "      - settings.php",
+                "    max_reasonable_bundle_tokens: 40",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_eval(db_path=db_path, eval_file=eval_file, with_bundles=True, bundle_max_tokens=40)
+
+    assert report.outcomes[0].grade == "STRONG PASS"
+    assert report.outcomes[0].bundle_grade == "PARTIAL"
+    assert report.outcomes[0].bundle_selection_strategy == "truncated_match"
+
+
+def test_run_eval_with_bundles_can_report_insufficient_when_required_context_is_missing(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "admin.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "## Admin settings\n\n"
+        "This page explains plugin configuration without naming the target file explicitly.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=120, overlap_tokens=10)
+
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: admin-settings",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
+                "    query: How do I add admin settings for a plugin?",
+                "    preferred_document_paths:",
+                "      - admin.md",
+                "    required_heading_substrings_for_bundle:",
+                "      - settings.php",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_eval(db_path=db_path, eval_file=eval_file, with_bundles=True, bundle_max_tokens=220)
+
+    assert report.outcomes[0].grade == "STRONG PASS"
+    assert report.outcomes[0].bundle_grade == "INSUFFICIENT"
+    assert report.outcomes[0].bundle_required_headings_missing == ["settings.php"]
+
+
+def test_bundle_reporting_stays_consistent_across_renderers(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "admin.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "## Admin settings\n\n"
+        "Use settings.php to add plugin settings. "
+        "Document each setting and explain how the admin tree and defaults are registered for the plugin.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=120, overlap_tokens=10)
+
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: admin-settings",
+                "    bucket: plugin-structure",
+                "    concept_id: admin-settings",
+                "    query: How do I add admin settings for a plugin?",
+                "    preferred_document_paths:",
+                "      - admin.md",
+                "    required_heading_substrings_for_bundle:",
+                "      - settings.php",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_eval(db_path=db_path, eval_file=eval_file, with_bundles=True, bundle_max_tokens=220)
+    json_payload = report.model_dump()
+    text_output = render_eval_text(report, show_weak_details=True)
+    summary_output = render_eval_summary_markdown(report)
+    summary_fields = _parse_summary_markdown(summary_output)
+
+    assert report.bundle_overall is not None
+    assert f"bundle_complete: {json_payload['bundle_overall']['complete']}" in text_output
+    assert f"bundle_partial: {json_payload['bundle_overall']['partial']}" in text_output
+    assert f"bundle_insufficient: {json_payload['bundle_overall']['insufficient']}" in text_output
+    assert summary_fields["Bundle complete"] == str(json_payload["bundle_overall"]["complete"])
+    assert summary_fields["Bundle partial"] == str(json_payload["bundle_overall"]["partial"])
+    assert summary_fields["Bundle insufficient"] == str(json_payload["bundle_overall"]["insufficient"])
 
 
 def test_assert_report_consistent_fails_on_divergent_aggregates(tmp_path: Path) -> None:

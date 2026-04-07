@@ -54,7 +54,9 @@ def test_cli_eval_and_context_bundle(tmp_path: Path) -> None:
         "---\n"
         "title: Admin settings\n"
         "---\n\n"
-        "Use settings.php to add plugin settings.\n",
+        "Use settings.php to add plugin settings. "
+        "Explain the admin tree, defaults, and configuration structure so developers can apply the pattern correctly. "
+        "Include enough surrounding explanation that a coding agent can understand where the setting is registered, how the admin tree is built, and how defaults are supplied.\n",
         encoding="utf-8",
     )
     db_path = tmp_path / "docs.db"
@@ -69,6 +71,8 @@ def test_cli_eval_and_context_bundle(tmp_path: Path) -> None:
                 "      - apis/subsystems/admin/index.md",
                 "    preferred_heading_substrings:",
                 "      - Admin settings",
+                "    required_heading_substrings_for_bundle:",
+                "      - settings.php",
             ]
         ),
         encoding="utf-8",
@@ -82,11 +86,12 @@ def test_cli_eval_and_context_bundle(tmp_path: Path) -> None:
 
     eval_result = runner.invoke(
         app,
-        ["eval", "--db-path", str(db_path), "--eval-file", str(eval_file), "--json"],
+        ["eval", "--db-path", str(db_path), "--eval-file", str(eval_file), "--with-bundles", "--json"],
     )
     assert eval_result.exit_code == 0
     assert '"strong_pass_rate": 1.0' in eval_result.stdout
     assert '"grade": "STRONG PASS"' in eval_result.stdout
+    assert '"bundle_grade": "COMPLETE"' in eval_result.stdout
 
     bundle_result = runner.invoke(
         app,
@@ -98,12 +103,14 @@ def test_cli_eval_and_context_bundle(tmp_path: Path) -> None:
             "--context-bundle",
             "--bundle-max-tokens",
             "120",
+            "--explain-bundle",
             "--json",
         ],
     )
     assert bundle_result.exit_code == 0
     assert '"chunks"' in bundle_result.stdout
     assert '"selection_strategy"' in bundle_result.stdout
+    assert '"diagnostics"' in bundle_result.stdout
 
 
 def test_cli_query_explain_ranking_and_eval_weak_details(tmp_path: Path) -> None:
@@ -187,6 +194,8 @@ def test_cli_eval_text_and_json_are_consistent(tmp_path: Path) -> None:
                 "    query: How do I add admin settings for a plugin?",
                 "    preferred_document_paths:",
                 "      - admin.md",
+                "    required_heading_substrings_for_bundle:",
+                "      - settings.php",
             ]
         ),
         encoding="utf-8",
@@ -200,11 +209,11 @@ def test_cli_eval_text_and_json_are_consistent(tmp_path: Path) -> None:
 
     eval_json = runner.invoke(
         app,
-        ["eval", "--db-path", str(db_path), "--eval-file", str(eval_file), "--json"],
+        ["eval", "--db-path", str(db_path), "--eval-file", str(eval_file), "--with-bundles", "--json"],
     )
     eval_text = runner.invoke(
         app,
-        ["eval", "--db-path", str(db_path), "--eval-file", str(eval_file)],
+        ["eval", "--db-path", str(db_path), "--eval-file", str(eval_file), "--with-bundles"],
     )
     assert eval_json.exit_code == 0
     assert eval_text.exit_code == 0
@@ -214,6 +223,58 @@ def test_cli_eval_text_and_json_are_consistent(tmp_path: Path) -> None:
     assert f"strong_passes: {payload['strong_passes']}" in eval_text.stdout
     assert f"weak_passes: {payload['weak_passes']}" in eval_text.stdout
     assert f"misses: {payload['misses']}" in eval_text.stdout
+    assert f"bundle_complete: {payload['bundle_overall']['complete']}" in eval_text.stdout
+
+
+def test_cli_eval_show_bundle_details_outputs_bundle_diagnostics(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "admin.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "## Admin settings\n\n"
+        "Use settings.php to add plugin settings.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: admin-settings",
+                "    query: How do I add admin settings for a plugin?",
+                "    preferred_document_paths:",
+                "      - admin.md",
+                "    required_heading_substrings_for_bundle:",
+                "      - settings.php",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    ingest_result = runner.invoke(
+        app,
+        ["ingest", "--source", str(docs_dir), "--db-path", str(db_path), "--json"],
+    )
+    assert ingest_result.exit_code == 0
+
+    eval_result = runner.invoke(
+        app,
+        [
+            "eval",
+            "--db-path",
+            str(db_path),
+            "--eval-file",
+            str(eval_file),
+            "--with-bundles",
+            "--show-bundle-details",
+        ],
+    )
+    assert eval_result.exit_code == 0
+    assert "bundle_grade=" in eval_result.stdout
+    assert "bundle=" in eval_result.stdout
 
 
 def test_validation_worktree_payload_rejects_dirty_tree(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:

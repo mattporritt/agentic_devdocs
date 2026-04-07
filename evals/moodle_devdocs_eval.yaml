@@ -14,6 +14,9 @@ cases:
     acceptable_heading_substrings:
       - "Admin settings"
       - "settings"
+    required_heading_substrings_for_bundle:
+      - "settings.php"
+    max_reasonable_bundle_tokens: 320
     top_k: 5
 
   - id: admin-settings-file-location
@@ -30,6 +33,9 @@ cases:
     acceptable_heading_substrings:
       - "settings.php"
       - "Admin settings"
+    required_heading_substrings_for_bundle:
+      - "settings.php"
+    max_reasonable_bundle_tokens: 320
     top_k: 5
 
   - id: plugin-upgrade-steps-howto
@@ -48,6 +54,9 @@ cases:
       - "db/upgrade.php"
       - "Upgrade helpers"
       - "Upgrade"
+    required_heading_substrings_for_bundle:
+      - "upgrade.php"
+    max_reasonable_bundle_tokens: 380
     top_k: 5
 
   - id: plugin-upgrade-steps-location
@@ -65,6 +74,9 @@ cases:
     acceptable_heading_substrings:
       - "upgrade.php"
       - "Upgrade"
+    required_heading_substrings_for_bundle:
+      - "upgrade.php"
+    max_reasonable_bundle_tokens: 380
     top_k: 5
 
   - id: plugin-upgrade-steps-writing
@@ -83,6 +95,9 @@ cases:
       - "savepoint"
       - "upgrade step"
       - "upgrade.php"
+    required_heading_substrings_for_bundle:
+      - "upgrade.php"
+    max_reasonable_bundle_tokens: 380
     top_k: 5
 
   - id: capabilities-access-howto
@@ -100,6 +115,9 @@ cases:
       - "Access API"
       - "How to define new capabilities in plugins"
       - "db/access.php"
+    required_heading_substrings_for_bundle:
+      - "capabilities"
+    max_reasonable_bundle_tokens: 320
     top_k: 5
 
   - id: capabilities-access-location
@@ -116,6 +134,9 @@ cases:
     acceptable_heading_substrings:
       - "capabilities"
       - "db/access.php"
+    required_heading_substrings_for_bundle:
+      - "capabilities"
+    max_reasonable_bundle_tokens: 320
     top_k: 5
 
   - id: scheduled-tasks-howto
@@ -132,6 +153,9 @@ cases:
     acceptable_heading_substrings:
       - "scheduled tasks"
       - "db/tasks.php"
+    required_heading_substrings_for_bundle:
+      - "db/tasks.php"
+    max_reasonable_bundle_tokens: 360
     top_k: 5
 
   - id: scheduled-tasks-location
@@ -148,6 +172,9 @@ cases:
     acceptable_heading_substrings:
       - "scheduled tasks"
       - "db/tasks.php"
+    required_heading_substrings_for_bundle:
+      - "db/tasks.php"
+    max_reasonable_bundle_tokens: 360
     top_k: 5
 
   - id: web-services-howto
@@ -167,6 +194,9 @@ cases:
       - "External functions"
       - "Writing a new service"
       - "db/services.php"
+    required_heading_substrings_for_bundle:
+      - "External functions"
+    max_reasonable_bundle_tokens: 420
     top_k: 5
 
   - id: web-services-location
@@ -185,6 +215,9 @@ cases:
       - "External functions"
       - "db/services.php"
       - "web service"
+    required_heading_substrings_for_bundle:
+      - "External functions"
+    max_reasonable_bundle_tokens: 420
     top_k: 5
 
   - id: forms-validation-howto
@@ -201,6 +234,9 @@ cases:
       - "Forms API"
       - "validation"
       - "addRule"
+    required_heading_substrings_for_bundle:
+      - "addRule"
+    max_reasonable_bundle_tokens: 320
     disallowed_document_paths:
       - "docs/apis/subsystems/xapi/index.md"
     top_k: 5
@@ -219,6 +255,9 @@ cases:
       - "addRule"
       - "validation"
       - "Forms API"
+    required_heading_substrings_for_bundle:
+      - "addRule"
+    max_reasonable_bundle_tokens: 320
     disallowed_document_paths:
       - "docs/apis/subsystems/xapi/index.md"
     top_k: 5
@@ -240,6 +279,9 @@ cases:
       - "lang/en"
       - "Language string definitions"
       - "Language files"
+    required_heading_substrings_for_bundle:
+      - "Language files"
+    max_reasonable_bundle_tokens: 320
     disallowed_document_paths:
       - "docs/guides/javascript/index.md"
     top_k: 5
@@ -258,6 +300,9 @@ cases:
       - "lang/en"
       - "Language files"
       - "language strings"
+    required_heading_substrings_for_bundle:
+      - "lang/en"
+    max_reasonable_bundle_tokens: 320
     disallowed_document_paths:
       - "docs/guides/javascript/index.md"
     top_k: 5
@@ -276,6 +321,9 @@ cases:
       - "Language string definitions"
       - "language strings"
       - "Language files"
+    required_heading_substrings_for_bundle:
+      - "Language files"
+    max_reasonable_bundle_tokens: 320
     top_k: 5
 
   - id: output-renderers-howto
@@ -293,6 +341,9 @@ cases:
       - "output"
       - "Templates"
       - "renderers"
+    required_heading_substrings_for_bundle:
+      - "renderers"
+    max_reasonable_bundle_tokens: 420
     top_k: 5
 
   - id: output-renderers-location
@@ -309,6 +360,9 @@ cases:
       - "renderers"
       - "Output API"
       - "output"
+    required_heading_substrings_for_bundle:
+      - "renderers"
+    max_reasonable_bundle_tokens: 420
     top_k: 5
 
   - id: mustache-templates-howto
@@ -325,6 +379,9 @@ cases:
     acceptable_heading_substrings:
       - "templates"
       - "Mustache"
+    required_heading_substrings_for_bundle:
+      - "Mustache"
+    max_reasonable_bundle_tokens: 420
     top_k: 5
 
   - id: mustache-templates-rendering
@@ -342,6 +399,9 @@ cases:
       - "Templates"
       - "renderers"
       - "Mustache"
+    required_heading_substrings_for_bundle:
+      - "renderers"
+    max_reasonable_bundle_tokens: 420
     top_k: 5
 
   - id: mustache-templates-override
@@ -359,6 +419,9 @@ cases:
       - "templates"
       - "override"
       - "Mustache"
+    required_heading_substrings_for_bundle:
+      - "Mustache"
+    max_reasonable_bundle_tokens: 420
     top_k: 5
 
   - id: privacy-providers-howto
@@ -375,6 +438,9 @@ cases:
       - "Privacy API"
       - "metadata providers"
       - "request providers"
+    required_heading_substrings_for_bundle:
+      - "Privacy API"
+    max_reasonable_bundle_tokens: 420
     disallowed_document_paths:
       - "docs/apis/plugintypes/ai/provider.md"
     top_k: 5
@@ -393,6 +459,9 @@ cases:
       - "metadata provider"
       - "request provider"
       - "Privacy API"
+    required_heading_substrings_for_bundle:
+      - "provider"
+    max_reasonable_bundle_tokens: 420
     disallowed_document_paths:
       - "docs/apis/plugintypes/ai/provider.md"
     top_k: 5
@@ -412,6 +481,9 @@ cases:
       - "Events API"
       - "db/events.php"
       - "Event observers"
+    required_heading_substrings_for_bundle:
+      - "db/events.php"
+    max_reasonable_bundle_tokens: 420
     disallowed_document_paths:
       - "docs/apis/subsystems/output/inplace.md"
       - "docs/apis/plugintypes/assign/feedback.md"
@@ -433,6 +505,9 @@ cases:
       - "Event observers"
       - "Events API"
       - "db/events.php"
+    required_heading_substrings_for_bundle:
+      - "Event observers"
+    max_reasonable_bundle_tokens: 420
     disallowed_document_paths:
       - "docs/apis/subsystems/output/inplace.md"
       - "docs/apis/plugintypes/assign/feedback.md"
@@ -454,6 +529,9 @@ cases:
       - "Events API"
       - "Event observers"
       - "events"
+    required_heading_substrings_for_bundle:
+      - "Event observers"
+    max_reasonable_bundle_tokens: 420
     top_k: 5
 
   - id: phpunit-howto
@@ -471,6 +549,9 @@ cases:
       - "Writing PHPUnit tests"
       - "PHPUnit executions"
       - "PHPUnit"
+    required_heading_substrings_for_bundle:
+      - "Writing PHPUnit tests"
+    max_reasonable_bundle_tokens: 420
     top_k: 5
 
   - id: phpunit-location
@@ -487,6 +568,9 @@ cases:
     acceptable_heading_substrings:
       - "Writing PHPUnit tests"
       - "PHPUnit"
+    required_heading_substrings_for_bundle:
+      - "Writing PHPUnit tests"
+    max_reasonable_bundle_tokens: 420
     top_k: 5
 
   - id: behat-howto
@@ -504,6 +588,9 @@ cases:
       - "Executing behat tests"
       - "Writing acceptance tests"
       - "Behat"
+    required_heading_substrings_for_bundle:
+      - "Writing acceptance tests"
+    max_reasonable_bundle_tokens: 420
     top_k: 5
 
   - id: behat-location
@@ -521,4 +608,7 @@ cases:
       - "Behat"
       - "Writing acceptance tests"
       - "Executing behat tests"
+    required_heading_substrings_for_bundle:
+      - "Writing acceptance tests"
+    max_reasonable_bundle_tokens: 420
     top_k: 5

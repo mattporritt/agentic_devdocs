@@ -105,6 +105,7 @@ def query(
     include_next: Annotated[bool, typer.Option(help="Include the next chunk in context bundles.")] = False,
     bundle_max_tokens: Annotated[int, typer.Option(help="Maximum tokens to include in a context bundle.")] = 600,
     explain_ranking: Annotated[bool, typer.Option("--explain-ranking", help="Include reranking signal breakdowns in the output.")] = False,
+    explain_bundle: Annotated[bool, typer.Option("--explain-bundle", help="Include bundle diagnostics in the output.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Query the indexed chunks using SQLite FTS5 lexical search."""
@@ -132,6 +133,8 @@ def query(
             typer.echo(f"bundle_token_count: {bundle.bundle_token_count}")
             typer.echo(f"selection_strategy: {bundle.selection_strategy}")
             typer.echo(f"repo_commit_hash: {bundle.repo_commit_hash}")
+            if explain_bundle and bundle.diagnostics:
+                typer.echo(f"bundle_diagnostics: {json.dumps(bundle.diagnostics, sort_keys=True)}")
             if bundle.snippet:
                 typer.echo(f"snippet: {bundle.snippet}")
             for chunk in bundle.chunks:
@@ -284,15 +287,23 @@ def eval(
     db_path: Annotated[Path, typer.Option(help="SQLite database path.")],
     eval_file: Annotated[Path, typer.Option(help="Path to the retrieval eval YAML or JSON file.")],
     show_weak_details: Annotated[bool, typer.Option(help="Show extra diagnostics for weak passes and ranking misses.")] = False,
+    with_bundles: Annotated[bool, typer.Option(help="Evaluate agent-facing context bundle usefulness alongside retrieval.")] = False,
+    show_bundle_details: Annotated[bool, typer.Option(help="Show extra diagnostics for bundle usefulness outcomes.")] = False,
+    bundle_max_tokens: Annotated[int, typer.Option(help="Maximum tokens for evaluated context bundles.")] = 450,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Run the lightweight retrieval evaluation harness."""
 
-    report = run_eval(db_path=db_path, eval_file=eval_file)
+    report = run_eval(
+        db_path=db_path,
+        eval_file=eval_file,
+        with_bundles=with_bundles,
+        bundle_max_tokens=bundle_max_tokens,
+    )
     if json_output:
         _emit(report.model_dump(), True)
         return
-    typer.echo(render_eval_text(report, show_weak_details=show_weak_details))
+    typer.echo(render_eval_text(report, show_weak_details=(show_weak_details or show_bundle_details)))
 
 
 if __name__ == "__main__":
