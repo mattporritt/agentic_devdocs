@@ -343,7 +343,8 @@ def test_validation_summary_status_distinguishes_warnings_from_regression() -> N
     assert status["bundle_fully_green"] is True
     assert status["bundle_non_complete_present"] is False
     assert status["baseline_comparison"]["status"] == "not_compared"
-    assert status["baseline_comparison"]["regressed"] is None
+    assert status["baseline_comparison"]["baseline_provided"] is False
+    assert status["baseline_comparison"]["retrieval_status"] is None
 
 
 def test_validation_summary_status_marks_fully_green_run() -> None:

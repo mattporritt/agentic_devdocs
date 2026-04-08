@@ -84,12 +84,22 @@ def _validation_summary_status(eval_report: object | None) -> dict[str, object] 
         "weak_or_miss_present": weak_or_miss_present,
         "bundle_fully_green": bundle_fully_green,
         "bundle_non_complete_present": bundle_non_complete_present,
-        "baseline_comparison": {
-            "status": "not_compared",
-            "baseline_provided": False,
-            "regressed": None,
-            "improved": None,
-        },
+        "baseline_comparison": (
+            eval_report.baseline_comparison.model_dump()
+            if getattr(eval_report, "baseline_comparison", None) is not None
+            else {
+                "status": "not_compared",
+                "baseline_provided": False,
+                "baseline_path": None,
+                "retrieval_status": None,
+                "bundle_status": None,
+                "retrieval_deltas": {},
+                "bundle_deltas": {},
+                "changed_retrieval_buckets": [],
+                "changed_bundle_buckets": [],
+                "changed_cases": [],
+            }
+        ),
     }
 
 
@@ -284,6 +294,7 @@ def verify_devdocs(
     overlap_tokens: Annotated[int, typer.Option(help="Overlap tokens between adjacent chunks.")] = 60,
     with_bundles: Annotated[bool, typer.Option(help="Evaluate bundle usefulness as part of the validation payload.")] = True,
     bundle_max_tokens: Annotated[int, typer.Option(help="Maximum tokens for evaluated context bundles in validation.")] = 450,
+    baseline: Annotated[Path | None, typer.Option(help="Optional prior eval.json or verify_devdocs.json artifact to compare against.")] = None,
     skip_sync: Annotated[bool, typer.Option(help="Use the existing local checkout without attempting a network sync.")] = False,
     allow_dirty: Annotated[bool, typer.Option(help="Allow validation to run from a dirty git working tree.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
@@ -315,6 +326,7 @@ def verify_devdocs(
             eval_file=eval_file,
             with_bundles=with_bundles,
             bundle_max_tokens=bundle_max_tokens,
+            baseline=baseline,
         )
         if eval_file is not None
         else None
@@ -343,6 +355,7 @@ def eval(
     with_bundles: Annotated[bool, typer.Option(help="Evaluate agent-facing context bundle usefulness alongside retrieval.")] = False,
     show_bundle_details: Annotated[bool, typer.Option(help="Show extra diagnostics for bundle usefulness outcomes.")] = False,
     bundle_max_tokens: Annotated[int, typer.Option(help="Maximum tokens for evaluated context bundles.")] = 450,
+    baseline: Annotated[Path | None, typer.Option(help="Optional prior eval.json or verify_devdocs.json artifact to compare against.")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Run the lightweight retrieval evaluation harness."""
@@ -352,6 +365,7 @@ def eval(
         eval_file=eval_file,
         with_bundles=with_bundles,
         bundle_max_tokens=bundle_max_tokens,
+        baseline=baseline,
     )
     if json_output:
         _emit(report.model_dump(), True)

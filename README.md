@@ -308,6 +308,7 @@ Useful flags:
 
 - `--eval-file`: run the strict eval as part of the same sequential validation workflow
 - `--allow-dirty`: override the clean-worktree requirement, while recording that the run came from a dirty tree
+- `--baseline`: compare this run against a prior `eval.json` or `verify_devdocs.json` artifact
 
 The validation payload separates current-run quality from baseline comparison:
 
@@ -322,12 +323,40 @@ When bundle evaluation is not run, the two bundle status fields remain `null`. W
 
 This avoids treating “not perfect” as “regressed”. A run with one weak case is a warning state, not a baseline regression.
 
+When a baseline is supplied, comparison remains explicit and separate from current-run quality:
+
+- supported baseline artifacts are a prior `eval.json` or a prior `verify_devdocs.json`
+- comparison statuses are `improved`, `unchanged`, `regressed`, `mixed`, or `not_compared`
+- retrieval and bundle comparison are reported independently, then rolled up into the overall baseline comparison status
+- changed retrieval buckets, changed bundle buckets, and changed case outcomes are listed when they differ from the baseline
+
+Example:
+
+```bash
+agentic-docs verify-devdocs \
+  --repo-url https://github.com/moodle/devdocs/ \
+  --local-path ./_smoke_test/devdocs \
+  --db-path ./_smoke_test/agentic-docs.db \
+  --eval-file ./evals/moodle_devdocs_eval.yaml \
+  --baseline ./verification_runs/2026-04-07_15-50-20/verify_devdocs.json
+```
+
 ### `eval`
 
 Run the lightweight retrieval evaluation harness.
 
 ```bash
 agentic-docs eval --db-path <path> --eval-file ./evals/moodle_devdocs_eval.yaml --show-weak-details
+```
+
+You can also compare directly against a prior eval artifact:
+
+```bash
+agentic-docs eval \
+  --db-path <path> \
+  --eval-file ./evals/moodle_devdocs_eval.yaml \
+  --with-bundles \
+  --baseline ./verification_runs/2026-04-07_15-50-20/eval.json
 ```
 
 The eval command reports:
@@ -343,6 +372,7 @@ The eval command reports:
 - preferred-result rank and ranking diagnostics for weak passes when requested
 - bundle diagnostics for missing headings, oversize bundles, or thin/noisy context when requested
 - failure summaries for misses
+- optional baseline comparison deltas, changed buckets, and changed cases when `--baseline` is supplied
 
 Use `--json` for machine-readable output suitable for automation or later comparison between runs.
 

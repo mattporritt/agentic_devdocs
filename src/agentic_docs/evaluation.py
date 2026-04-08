@@ -9,6 +9,10 @@ from textwrap import dedent
 import yaml
 
 from agentic_docs.models import (
+    BaselineBucketChange,
+    BaselineCaseChange,
+    BaselineComparison,
+    BaselineMetricDelta,
     BundleGradeStats,
     ContextBundle,
     EvalCase,
@@ -39,6 +43,17 @@ def load_eval_cases(eval_file: Path) -> list[EvalCase]:
         msg = f"Eval file must contain a list of cases or a top-level 'cases' key: {eval_file}"
         raise ValueError(msg)
     return [EvalCase.model_validate(case) for case in cases]
+
+
+def load_eval_report_artifact(artifact_path: Path) -> EvalReport:
+    """Load an eval report from either a raw eval artifact or a verify-devdocs artifact."""
+
+    loaded = json.loads(artifact_path.read_text(encoding="utf-8"))
+    payload = loaded["eval"] if isinstance(loaded, dict) and "eval" in loaded else loaded
+    if not isinstance(payload, dict):
+        msg = f"Baseline artifact must be an eval JSON object or a verify-devdocs payload: {artifact_path}"
+        raise ValueError(msg)
+    return EvalReport.model_validate(payload)
 
 
 def _matches_any(substrings: list[str], haystacks: list[str]) -> list[str]:
@@ -435,6 +450,198 @@ def _bundle_stats(outcomes: list[EvalOutcome]) -> BundleGradeStats | None:
     )
 
 
+def _comparison_status_from_flags(improved: bool, regressed: bool) -> str:
+    if improved and regressed:
+        return "mixed"
+    if regressed:
+        return "regressed"
+    if improved:
+        return "improved"
+    return "unchanged"
+
+
+def _metric_delta(current: float | int, baseline: float | int) -> BaselineMetricDelta:
+    return BaselineMetricDelta(current=current, baseline=baseline, delta=float(current) - float(baseline))
+
+
+def _compare_metric_set(current_metrics: dict[str, float | int], baseline_metrics: dict[str, float | int], better_when_higher: set[str]) -> tuple[str, dict[str, BaselineMetricDelta]]:
+    deltas: dict[str, BaselineMetricDelta] = {}
+    improved = False
+    regressed = False
+    for key, current_value in current_metrics.items():
+        baseline_value = baseline_metrics[key]
+        delta = _metric_delta(current_value, baseline_value)
+        deltas[key] = delta
+        if current_value == baseline_value:
+            continue
+        if key in better_when_higher:
+            improved = improved or current_value > baseline_value
+            regressed = regressed or current_value < baseline_value
+        else:
+            improved = improved or current_value < baseline_value
+            regressed = regressed or current_value > baseline_value
+    return _comparison_status_from_flags(improved, regressed), deltas
+
+
+def _retrieval_metrics(report: EvalReport) -> dict[str, float | int]:
+    return {
+        "strong_passes": report.strong_passes,
+        "weak_passes": report.weak_passes,
+        "misses": report.misses,
+        "top_1_strong_pass_rate": report.top_1.strong_pass_rate,
+        "top_3_strong_pass_rate": report.top_3.strong_pass_rate,
+        "top_5_strong_pass_rate": report.top_5.strong_pass_rate,
+    }
+
+
+def _bundle_metrics(stats: BundleGradeStats) -> dict[str, float | int]:
+    return {
+        "complete": stats.complete,
+        "partial": stats.partial,
+        "insufficient": stats.insufficient,
+        "complete_rate": stats.complete_rate,
+    }
+
+
+def _group_retrieval_metrics(report: EvalGroupReport) -> dict[str, float | int]:
+    return {
+        "strong_passes": report.strong_passes,
+        "weak_passes": report.weak_passes,
+        "misses": report.misses,
+        "top_1_strong_pass_rate": report.top_1.strong_pass_rate,
+    }
+
+
+def _compare_bucket_maps(
+    current: dict[str, EvalGroupReport],
+    baseline: dict[str, EvalGroupReport],
+) -> list[BaselineBucketChange]:
+    labels = sorted(set(current) | set(baseline))
+    changes: list[BaselineBucketChange] = []
+    better_when_higher = {"strong_passes", "top_1_strong_pass_rate"}
+    for label in labels:
+        current_bucket = current.get(label)
+        baseline_bucket = baseline.get(label)
+        if current_bucket is None or baseline_bucket is None:
+            continue
+        status, _ = _compare_metric_set(
+            _group_retrieval_metrics(current_bucket),
+            _group_retrieval_metrics(baseline_bucket),
+            better_when_higher=better_when_higher,
+        )
+        if status == "unchanged":
+            continue
+        changes.append(
+            BaselineBucketChange(
+                metric_family="retrieval",
+                label=label,
+                status=status,
+                current=_group_retrieval_metrics(current_bucket),
+                baseline=_group_retrieval_metrics(baseline_bucket),
+            )
+        )
+    return changes
+
+
+def _compare_bundle_bucket_maps(
+    current: dict[str, BundleGradeStats],
+    baseline: dict[str, BundleGradeStats],
+) -> list[BaselineBucketChange]:
+    labels = sorted(set(current) | set(baseline))
+    changes: list[BaselineBucketChange] = []
+    better_when_higher = {"complete", "complete_rate"}
+    for label in labels:
+        current_bucket = current.get(label)
+        baseline_bucket = baseline.get(label)
+        if current_bucket is None or baseline_bucket is None:
+            continue
+        current_metrics = _bundle_metrics(current_bucket)
+        baseline_metrics = _bundle_metrics(baseline_bucket)
+        status, _ = _compare_metric_set(current_metrics, baseline_metrics, better_when_higher=better_when_higher)
+        if status == "unchanged":
+            continue
+        changes.append(
+            BaselineBucketChange(
+                metric_family="bundle",
+                label=label,
+                status=status,
+                current=current_metrics,
+                baseline=baseline_metrics,
+            )
+        )
+    return changes
+
+
+def _compare_case_changes(current: EvalReport, baseline: EvalReport) -> list[BaselineCaseChange]:
+    baseline_outcomes = {outcome.case_id: outcome for outcome in baseline.outcomes}
+    changes: list[BaselineCaseChange] = []
+    for outcome in current.outcomes:
+        baseline_outcome = baseline_outcomes.get(outcome.case_id)
+        if baseline_outcome is None:
+            continue
+        retrieval_changed = outcome.grade != baseline_outcome.grade
+        bundle_changed = outcome.bundle_grade != baseline_outcome.bundle_grade
+        if not retrieval_changed and not bundle_changed:
+            continue
+        changes.append(
+            BaselineCaseChange(
+                case_id=outcome.case_id,
+                query=outcome.query,
+                retrieval_from=baseline_outcome.grade,
+                retrieval_to=outcome.grade,
+                bundle_from=baseline_outcome.bundle_grade,
+                bundle_to=outcome.bundle_grade,
+            )
+        )
+    return changes
+
+
+def compare_eval_reports(current: EvalReport, baseline: EvalReport, baseline_path: Path) -> BaselineComparison:
+    """Compare a current eval report against a supplied baseline report."""
+
+    retrieval_status, retrieval_deltas = _compare_metric_set(
+        _retrieval_metrics(current),
+        _retrieval_metrics(baseline),
+        better_when_higher={"strong_passes", "top_1_strong_pass_rate", "top_3_strong_pass_rate", "top_5_strong_pass_rate"},
+    )
+
+    bundle_status: str | None = None
+    bundle_deltas: dict[str, BaselineMetricDelta] = {}
+    if current.bundle_overall is not None and baseline.bundle_overall is not None:
+        bundle_status, bundle_deltas = _compare_metric_set(
+            _bundle_metrics(current.bundle_overall),
+            _bundle_metrics(baseline.bundle_overall),
+            better_when_higher={"complete", "complete_rate"},
+        )
+
+    overall_flags = {retrieval_status}
+    if bundle_status is not None:
+        overall_flags.add(bundle_status)
+    if "regressed" in overall_flags and "improved" in overall_flags:
+        status = "mixed"
+    elif "mixed" in overall_flags:
+        status = "mixed"
+    elif "regressed" in overall_flags:
+        status = "regressed"
+    elif "improved" in overall_flags:
+        status = "improved"
+    else:
+        status = "unchanged"
+
+    return BaselineComparison(
+        status=status,
+        baseline_provided=True,
+        baseline_path=str(baseline_path),
+        retrieval_status=retrieval_status,
+        bundle_status=bundle_status,
+        retrieval_deltas=retrieval_deltas,
+        bundle_deltas=bundle_deltas,
+        changed_retrieval_buckets=_compare_bucket_maps(current.buckets, baseline.buckets),
+        changed_bundle_buckets=_compare_bundle_bucket_maps(current.bundle_buckets, baseline.bundle_buckets),
+        changed_cases=_compare_case_changes(current, baseline),
+    )
+
+
 def _bundle_group_stats(outcomes: list[EvalOutcome], key_fn) -> dict[str, BundleGradeStats]:
     grouped: dict[str, list[EvalOutcome]] = {}
     for outcome in outcomes:
@@ -487,7 +694,7 @@ def assert_report_consistent(report: EvalReport) -> None:
     """Fail fast if aggregate report fields diverge from per-query outcomes."""
 
     recomputed = _build_report(report.outcomes)
-    if report.model_dump() != recomputed.model_dump():
+    if report.model_dump(exclude={"baseline_comparison"}) != recomputed.model_dump(exclude={"baseline_comparison"}):
         msg = "Eval report aggregates diverged from per-query outcomes"
         raise ValueError(msg)
 
@@ -521,6 +728,44 @@ def render_eval_text(report: EvalReport, show_weak_details: bool = False) -> str
                 "",
             ]
         )
+    if report.baseline_comparison is not None:
+        lines.extend(
+            [
+                f"baseline_comparison_status: {report.baseline_comparison.status}",
+                f"baseline_path: {report.baseline_comparison.baseline_path}",
+                f"retrieval_comparison_status: {report.baseline_comparison.retrieval_status}",
+                f"bundle_comparison_status: {report.baseline_comparison.bundle_status}",
+                "",
+            ]
+        )
+        if report.baseline_comparison.retrieval_deltas:
+            lines.append("retrieval_deltas:")
+            for key, delta in report.baseline_comparison.retrieval_deltas.items():
+                lines.append(f"  {key}: current={delta.current} baseline={delta.baseline} delta={delta.delta:.3f}")
+            lines.append("")
+        if report.baseline_comparison.bundle_deltas:
+            lines.append("bundle_deltas:")
+            for key, delta in report.baseline_comparison.bundle_deltas.items():
+                lines.append(f"  {key}: current={delta.current} baseline={delta.baseline} delta={delta.delta:.3f}")
+            lines.append("")
+        if report.baseline_comparison.changed_retrieval_buckets:
+            lines.append("changed_retrieval_buckets:")
+            for change in report.baseline_comparison.changed_retrieval_buckets:
+                lines.append(f"  {change.label}: {change.status}")
+            lines.append("")
+        if report.baseline_comparison.changed_bundle_buckets:
+            lines.append("changed_bundle_buckets:")
+            for change in report.baseline_comparison.changed_bundle_buckets:
+                lines.append(f"  {change.label}: {change.status}")
+            lines.append("")
+        if report.baseline_comparison.changed_cases:
+            lines.append("changed_cases:")
+            for change in report.baseline_comparison.changed_cases:
+                lines.append(
+                    f"  {change.case_id}: retrieval {change.retrieval_from}->{change.retrieval_to}, "
+                    f"bundle {change.bundle_from}->{change.bundle_to}"
+                )
+            lines.append("")
     if report.buckets:
         lines.append("bucket_summary:")
         for bucket, bucket_report in report.buckets.items():
@@ -603,6 +848,16 @@ def render_eval_summary_markdown(report: EvalReport) -> str:
                 f"- Bundle complete rate: `{report.bundle_overall.complete_rate:.3f}`",
             ]
         )
+    if report.baseline_comparison is not None:
+        summary = "\n".join(
+            [
+                summary,
+                f"- Baseline comparison: `{report.baseline_comparison.status}`",
+                f"- Baseline path: `{report.baseline_comparison.baseline_path}`",
+                f"- Retrieval comparison: `{report.baseline_comparison.retrieval_status}`",
+                f"- Bundle comparison: `{report.baseline_comparison.bundle_status}`",
+            ]
+        )
 
     if report.buckets:
         lines = [summary, "", "## Buckets", ""]
@@ -625,6 +880,21 @@ def render_eval_summary_markdown(report: EvalReport) -> str:
                     f"- Bundle bucket `{bucket}`: `{bucket_report.complete}` complete / `{bucket_report.partial}` partial / "
                     f"`{bucket_report.insufficient}` insufficient, complete `{bucket_report.complete_rate:.3f}`"
                 )
+        if report.baseline_comparison is not None and report.baseline_comparison.changed_retrieval_buckets:
+            lines.extend(["", "## Changed Retrieval Buckets", ""])
+            for change in report.baseline_comparison.changed_retrieval_buckets:
+                lines.append(f"- Retrieval bucket `{change.label}`: `{change.status}`")
+        if report.baseline_comparison is not None and report.baseline_comparison.changed_bundle_buckets:
+            lines.extend(["", "## Changed Bundle Buckets", ""])
+            for change in report.baseline_comparison.changed_bundle_buckets:
+                lines.append(f"- Bundle bucket `{change.label}`: `{change.status}`")
+        if report.baseline_comparison is not None and report.baseline_comparison.changed_cases:
+            lines.extend(["", "## Changed Cases", ""])
+            for change in report.baseline_comparison.changed_cases:
+                lines.append(
+                    f"- Case `{change.case_id}`: retrieval `{change.retrieval_from}` -> `{change.retrieval_to}`, "
+                    f"bundle `{change.bundle_from}` -> `{change.bundle_to}`"
+                )
         return "\n".join(lines)
     return summary
 
@@ -636,6 +906,7 @@ def run_eval(
     bundle_max_tokens: int = 450,
     include_previous: bool = True,
     include_next: bool = True,
+    baseline: Path | None = None,
 ) -> EvalReport:
     """Run retrieval evaluation over the configured set of queries."""
 
@@ -665,5 +936,8 @@ def run_eval(
             )
         )
     report = _build_report(outcomes)
+    if baseline is not None:
+        baseline_report = load_eval_report_artifact(baseline)
+        report = report.model_copy(update={"baseline_comparison": compare_eval_reports(report, baseline_report, baseline)})
     assert_report_consistent(report)
     return report

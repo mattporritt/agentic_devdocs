@@ -213,6 +213,7 @@ class EvalReport(BaseModel):
     concepts: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
     bundle_overall: "BundleGradeStats | None" = None
     bundle_buckets: dict[str, "BundleGradeStats"] = Field(default_factory=dict)
+    baseline_comparison: "BaselineComparison | None" = None
     outcomes: list[EvalOutcome]
 
 
@@ -240,3 +241,47 @@ class BundleGradeStats(BaseModel):
     complete_rate: float
     partial_rate: float
     insufficient_rate: float
+
+
+class BaselineMetricDelta(BaseModel):
+    """Delta for a single compared metric."""
+
+    current: float | int
+    baseline: float | int
+    delta: float
+
+
+class BaselineBucketChange(BaseModel):
+    """A changed retrieval or bundle bucket relative to baseline."""
+
+    metric_family: str
+    label: str
+    status: str
+    current: dict[str, float | int]
+    baseline: dict[str, float | int]
+
+
+class BaselineCaseChange(BaseModel):
+    """A retrieval and/or bundle outcome change for a single case."""
+
+    case_id: str
+    query: str
+    retrieval_from: str
+    retrieval_to: str
+    bundle_from: str | None = None
+    bundle_to: str | None = None
+
+
+class BaselineComparison(BaseModel):
+    """Comparison between the current eval report and a supplied baseline."""
+
+    status: str
+    baseline_provided: bool
+    baseline_path: str | None = None
+    retrieval_status: str | None = None
+    bundle_status: str | None = None
+    retrieval_deltas: dict[str, BaselineMetricDelta] = Field(default_factory=dict)
+    bundle_deltas: dict[str, BaselineMetricDelta] = Field(default_factory=dict)
+    changed_retrieval_buckets: list[BaselineBucketChange] = Field(default_factory=list)
+    changed_bundle_buckets: list[BaselineBucketChange] = Field(default_factory=list)
+    changed_cases: list[BaselineCaseChange] = Field(default_factory=list)

@@ -6,14 +6,55 @@ import re
 import pytest
 
 from agentic_docs.evaluation import (
+    _build_report,
     assert_report_consistent,
+    compare_eval_reports,
     load_eval_cases,
+    load_eval_report_artifact,
     render_eval_summary_markdown,
     render_eval_text,
     run_eval,
 )
 from agentic_docs.ingest import ingest_source
+from agentic_docs.models import BundleGradeStats, EvalOutcome, EvalReport, EvalWindowStats
 from agentic_docs.query_service import query_chunks
+
+
+def _window(strong: int, weak: int, misses: int, total: int) -> EvalWindowStats:
+    return EvalWindowStats(
+        strong_passes=strong,
+        weak_passes=weak,
+        misses=misses,
+        strong_pass_rate=strong / total if total else 0.0,
+        weak_pass_rate=weak / total if total else 0.0,
+    )
+
+
+def _report(
+    *,
+    strong: int,
+    weak: int,
+    misses: int,
+    outcomes: list[EvalOutcome],
+    bundle_overall: BundleGradeStats | None = None,
+    buckets: dict | None = None,
+    bundle_buckets: dict | None = None,
+) -> EvalReport:
+    report = _build_report(outcomes)
+    return report.model_copy(
+        update={
+            "strong_passes": strong,
+            "weak_passes": weak,
+            "misses": misses,
+            "top_1": _window(strong, weak, misses, len(outcomes)),
+            "top_3": _window(strong, weak, misses, len(outcomes)),
+            "top_5": _window(strong, weak, misses, len(outcomes)),
+            "buckets": report.buckets if buckets is None else buckets,
+            "concepts": report.concepts,
+            "bundle_overall": report.bundle_overall if bundle_overall is None else bundle_overall,
+            "bundle_buckets": report.bundle_buckets if bundle_buckets is None else bundle_buckets,
+        }
+    )
 
 
 def test_load_eval_cases_from_yaml(tmp_path: Path) -> None:
@@ -644,3 +685,267 @@ def test_bucket_and_concept_aggregates_remain_consistent(tmp_path: Path) -> None
         + report.buckets["plugin-structure"].misses
         == report.buckets["plugin-structure"].total_queries
     )
+
+
+def _outcome(case_id: str, query: str, grade: str, bucket: str = "bucket-a", bundle_grade: str | None = None) -> EvalOutcome:
+    return EvalOutcome(
+        case_id=case_id,
+        query=query,
+        bucket=bucket,
+        concept_id=None,
+        top_k=5,
+        grade=grade,
+        strong_pass_top_1=grade == "STRONG PASS",
+        strong_pass_top_3=grade == "STRONG PASS",
+        strong_pass_top_5=grade == "STRONG PASS",
+        weak_pass_top_1=grade == "WEAK PASS",
+        weak_pass_top_3=grade == "WEAK PASS",
+        weak_pass_top_5=grade == "WEAK PASS",
+        matched_result_rank=1 if grade != "MISS" else None,
+        bundle_grade=bundle_grade,
+    )
+
+
+def test_compare_eval_reports_marks_improved_and_tracks_case_changes(tmp_path: Path) -> None:
+    baseline = _report(
+        strong=0,
+        weak=1,
+        misses=0,
+        outcomes=[_outcome("case-a", "Query A", "WEAK PASS", bundle_grade="PARTIAL")],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=1,
+            complete=0,
+            partial=1,
+            insufficient=0,
+            complete_rate=0.0,
+            partial_rate=1.0,
+            insufficient_rate=0.0,
+        ),
+    )
+    current = _report(
+        strong=1,
+        weak=0,
+        misses=0,
+        outcomes=[_outcome("case-a", "Query A", "STRONG PASS", bundle_grade="COMPLETE")],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=1,
+            complete=1,
+            partial=0,
+            insufficient=0,
+            complete_rate=1.0,
+            partial_rate=0.0,
+            insufficient_rate=0.0,
+        ),
+    )
+
+    comparison = compare_eval_reports(current, baseline, tmp_path / "baseline.json")
+
+    assert comparison.status == "improved"
+    assert comparison.retrieval_status == "improved"
+    assert comparison.bundle_status == "improved"
+    assert comparison.changed_cases[0].retrieval_from == "WEAK PASS"
+    assert comparison.changed_cases[0].retrieval_to == "STRONG PASS"
+    assert comparison.changed_cases[0].bundle_from == "PARTIAL"
+    assert comparison.changed_cases[0].bundle_to == "COMPLETE"
+
+
+def test_compare_eval_reports_marks_regressed(tmp_path: Path) -> None:
+    baseline = _report(
+        strong=1,
+        weak=0,
+        misses=0,
+        outcomes=[_outcome("case-a", "Query A", "STRONG PASS", bundle_grade="COMPLETE")],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=1,
+            complete=1,
+            partial=0,
+            insufficient=0,
+            complete_rate=1.0,
+            partial_rate=0.0,
+            insufficient_rate=0.0,
+        ),
+    )
+    current = _report(
+        strong=0,
+        weak=0,
+        misses=1,
+        outcomes=[_outcome("case-a", "Query A", "MISS", bundle_grade="INSUFFICIENT")],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=1,
+            complete=0,
+            partial=0,
+            insufficient=1,
+            complete_rate=0.0,
+            partial_rate=0.0,
+            insufficient_rate=1.0,
+        ),
+    )
+
+    comparison = compare_eval_reports(current, baseline, tmp_path / "baseline.json")
+
+    assert comparison.status == "regressed"
+    assert comparison.retrieval_status == "regressed"
+    assert comparison.bundle_status == "regressed"
+
+
+def test_compare_eval_reports_marks_mixed_and_tracks_bucket_changes(tmp_path: Path) -> None:
+    baseline = _report(
+        strong=1,
+        weak=1,
+        misses=0,
+        outcomes=[
+            _outcome("case-a", "Query A", "STRONG PASS", bucket="bucket-a", bundle_grade="COMPLETE"),
+            _outcome("case-b", "Query B", "WEAK PASS", bucket="bucket-b", bundle_grade="PARTIAL"),
+        ],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=2,
+            complete=1,
+            partial=1,
+            insufficient=0,
+            complete_rate=0.5,
+            partial_rate=0.5,
+            insufficient_rate=0.0,
+        ),
+        buckets={
+            "bucket-a": _report(strong=1, weak=0, misses=0, outcomes=[_outcome("case-a", "Query A", "STRONG PASS", bucket="bucket-a")]).buckets["bucket-a"],
+            "bucket-b": _report(strong=0, weak=1, misses=0, outcomes=[_outcome("case-b", "Query B", "WEAK PASS", bucket="bucket-b")]).buckets["bucket-b"],
+        },
+        bundle_buckets={
+            "bucket-a": BundleGradeStats(total_evaluated=1, complete=1, partial=0, insufficient=0, complete_rate=1.0, partial_rate=0.0, insufficient_rate=0.0),
+            "bucket-b": BundleGradeStats(total_evaluated=1, complete=0, partial=1, insufficient=0, complete_rate=0.0, partial_rate=1.0, insufficient_rate=0.0),
+        },
+    )
+    current = _report(
+        strong=1,
+        weak=0,
+        misses=1,
+        outcomes=[
+            _outcome("case-a", "Query A", "MISS", bucket="bucket-a", bundle_grade="INSUFFICIENT"),
+            _outcome("case-b", "Query B", "STRONG PASS", bucket="bucket-b", bundle_grade="COMPLETE"),
+        ],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=2,
+            complete=1,
+            partial=0,
+            insufficient=1,
+            complete_rate=0.5,
+            partial_rate=0.0,
+            insufficient_rate=0.5,
+        ),
+        buckets={
+            "bucket-a": _report(strong=0, weak=0, misses=1, outcomes=[_outcome("case-a", "Query A", "MISS", bucket="bucket-a")]).buckets["bucket-a"],
+            "bucket-b": _report(strong=1, weak=0, misses=0, outcomes=[_outcome("case-b", "Query B", "STRONG PASS", bucket="bucket-b")]).buckets["bucket-b"],
+        },
+        bundle_buckets={
+            "bucket-a": BundleGradeStats(total_evaluated=1, complete=0, partial=0, insufficient=1, complete_rate=0.0, partial_rate=0.0, insufficient_rate=1.0),
+            "bucket-b": BundleGradeStats(total_evaluated=1, complete=1, partial=0, insufficient=0, complete_rate=1.0, partial_rate=0.0, insufficient_rate=0.0),
+        },
+    )
+
+    comparison = compare_eval_reports(current, baseline, tmp_path / "baseline.json")
+
+    assert comparison.status == "mixed"
+    assert comparison.retrieval_status == "mixed"
+    assert comparison.bundle_status == "mixed"
+    assert {change.label for change in comparison.changed_retrieval_buckets} == {"bucket-a", "bucket-b"}
+    assert {change.label for change in comparison.changed_bundle_buckets} == {"bucket-a", "bucket-b"}
+
+
+def test_compare_eval_reports_marks_unchanged(tmp_path: Path) -> None:
+    report = _report(
+        strong=1,
+        weak=0,
+        misses=0,
+        outcomes=[_outcome("case-a", "Query A", "STRONG PASS", bundle_grade="COMPLETE")],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=1,
+            complete=1,
+            partial=0,
+            insufficient=0,
+            complete_rate=1.0,
+            partial_rate=0.0,
+            insufficient_rate=0.0,
+        ),
+    )
+
+    comparison = compare_eval_reports(report, report, tmp_path / "baseline.json")
+
+    assert comparison.status == "unchanged"
+    assert comparison.retrieval_status == "unchanged"
+    assert comparison.bundle_status == "unchanged"
+    assert comparison.changed_cases == []
+
+
+def test_renderers_include_baseline_comparison(tmp_path: Path) -> None:
+    baseline = _report(
+        strong=0,
+        weak=1,
+        misses=0,
+        outcomes=[_outcome("case-a", "Query A", "WEAK PASS", bundle_grade="PARTIAL")],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=1,
+            complete=0,
+            partial=1,
+            insufficient=0,
+            complete_rate=0.0,
+            partial_rate=1.0,
+            insufficient_rate=0.0,
+        ),
+    )
+    current = _report(
+        strong=1,
+        weak=0,
+        misses=0,
+        outcomes=[_outcome("case-a", "Query A", "STRONG PASS", bundle_grade="COMPLETE")],
+        bundle_overall=BundleGradeStats(
+            total_evaluated=1,
+            complete=1,
+            partial=0,
+            insufficient=0,
+            complete_rate=1.0,
+            partial_rate=0.0,
+            insufficient_rate=0.0,
+        ),
+    ).model_copy(update={"baseline_comparison": compare_eval_reports(
+        _report(
+            strong=1,
+            weak=0,
+            misses=0,
+            outcomes=[_outcome("case-a", "Query A", "STRONG PASS", bundle_grade="COMPLETE")],
+            bundle_overall=BundleGradeStats(
+                total_evaluated=1,
+                complete=1,
+                partial=0,
+                insufficient=0,
+                complete_rate=1.0,
+                partial_rate=0.0,
+                insufficient_rate=0.0,
+            ),
+        ),
+        baseline,
+        tmp_path / "baseline.json",
+    )})
+
+    text_output = render_eval_text(current, show_weak_details=True)
+    summary_output = render_eval_summary_markdown(current)
+    payload = current.model_dump()
+
+    assert payload["baseline_comparison"]["status"] == "improved"
+    assert "baseline_comparison_status: improved" in text_output
+    assert "changed_cases:" in text_output
+    assert "Baseline comparison: `improved`" in summary_output
+
+
+def test_load_eval_report_artifact_supports_verify_payload(tmp_path: Path) -> None:
+    report = _report(
+        strong=1,
+        weak=0,
+        misses=0,
+        outcomes=[_outcome("case-a", "Query A", "STRONG PASS")],
+    )
+    artifact = tmp_path / "verify.json"
+    artifact.write_text(json.dumps({"eval": report.model_dump()}), encoding="utf-8")
+
+    loaded = load_eval_report_artifact(artifact)
+
+    assert loaded.strong_passes == 1
