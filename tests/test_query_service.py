@@ -54,6 +54,16 @@ def test_build_query_profile_detects_task_oriented_intents() -> None:
     assert "web_services" in implementation_profile.concept_families
 
 
+def test_build_query_profile_detects_flow_and_requirement_intents() -> None:
+    flow_profile = build_query_profile("Where does template rendering fit in the output flow?")
+    requirement_profile = build_query_profile("What do I need to implement for plugin privacy metadata?")
+
+    assert flow_profile.task_intent == "flow_explainer"
+    assert "output_templates" in flow_profile.concept_families
+    assert requirement_profile.task_intent == "implementation_guide"
+    assert "privacy" in requirement_profile.concept_families
+
+
 def test_query_chunks_and_context_bundle(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
@@ -284,6 +294,33 @@ def test_query_prefers_language_string_explainer_over_generic_string_pages(tmp_p
     assert float(results[0].rerank_breakdown["section_focus_bonus"]) > 0
 
 
+def test_query_prefers_language_string_file_doc_over_app_language_files_page(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "_files").mkdir(parents=True)
+    (docs_dir / "general" / "app" / "development").mkdir(parents=True)
+    (docs_dir / "apis" / "_files" / "lang.md").write_text(
+        "---\n"
+        "title: lang\n"
+        "---\n\n"
+        "## Language files\n\n"
+        "Plugin strings are defined in `lang/en/<plugintype>_<pluginname>.php`.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "general" / "app" / "development" / "development-guide.md").write_text(
+        "# Development guide\n\n## Folder structure\n\n### Language files\n\nApp language files live in the app development tree.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="What file contains a plugin's language strings?", top_k=2)
+
+    assert results[0].source_file_path == "apis/_files/lang.md"
+    assert float(results[0].rerank_breakdown["family_specific_bonus"]) > float(
+        results[1].rerank_breakdown["family_specific_bonus"]
+    )
+
+
 def test_query_prefers_templates_guide_over_plugin_specific_format_page(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     (docs_dir / "guides" / "templates").mkdir(parents=True)
@@ -306,6 +343,37 @@ def test_query_prefers_templates_guide_over_plugin_specific_format_page(tmp_path
 
     assert results[0].source_file_path == "guides/templates/index.md"
     assert float(results[0].rerank_breakdown["family_specific_bonus"]) > 0
+
+
+def test_query_prefers_output_flow_explainer_over_templates_index_for_flow_query(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "guides" / "templates").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "output").mkdir(parents=True)
+    (docs_dir / "guides" / "templates" / "index.md").write_text(
+        "---\n"
+        "title: Templates\n"
+        "---\n\n"
+        "## Templates\n\nTemplates can be overridden in plugins.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "apis" / "subsystems" / "output" / "index.md").write_text(
+        "---\n"
+        "title: Output API\n"
+        "---\n\n"
+        "## Page output journey\n\n"
+        "This explains how renderables, renderers, and templates fit into the output flow.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="Where does template rendering fit in the output flow?", top_k=2)
+
+    assert results[0].source_file_path == "apis/subsystems/output/index.md"
+    assert results[0].rerank_breakdown["query_intent"] == "conceptual"
+    assert float(results[0].rerank_breakdown["family_specific_bonus"]) > float(
+        results[1].rerank_breakdown["family_specific_bonus"]
+    )
 
 
 def test_query_prefers_templates_guide_over_output_api_for_mustache_concept_query(tmp_path: Path) -> None:
@@ -614,6 +682,34 @@ def test_context_bundle_adds_web_service_support_when_primary_already_has_db_ser
     assert any("External functions" in chunk.content or "Write the external function descriptions" in " > ".join(chunk.heading_path) for chunk in bundles[0].chunks)
 
 
+def test_context_bundle_prefers_web_service_definition_support_over_version_note_for_wire_up_query(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "writing-a-service.md").write_text(
+        "# Writing a new service\n\n"
+        "## Bump the plugin version\n\n"
+        "Increase version.php after adding your service.\n\n"
+        "## Write the external function descriptions\n\n"
+        "Register the function description in `db/services.php`.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="How do I wire up an external service in a plugin?", top_k=3)
+    bundles = build_context_bundles(
+        db_path=db_path,
+        results=results[:1],
+        support_results=results,
+        query_text="How do I wire up an external service in a plugin?",
+        bundle_max_tokens=220,
+    )
+
+    assert bundles[0].diagnostics["task_intent"] == "implementation_guide"
+    assert any("db/services.php" in chunk.content for chunk in bundles[0].chunks)
+    assert all("version.php" not in chunk.content for chunk in bundles[0].chunks if chunk.role == "support")
+
+
 def test_context_bundle_adds_behat_writing_support_for_location_query(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     (docs_dir / "general" / "development" / "tools" / "behat").mkdir(parents=True)
@@ -640,6 +736,37 @@ def test_context_bundle_adds_behat_writing_support_for_location_query(tmp_path: 
     assert len(bundles) == 1
     assert any(chunk.source_file_path.endswith("writing.md") for chunk in bundles[0].chunks)
     assert any("Writing acceptance tests" in " > ".join(chunk.heading_path) or "Writing acceptance tests" in chunk.content for chunk in bundles[0].chunks)
+
+
+def test_context_bundle_adds_privacy_metadata_support_for_requirement_query(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "privacy").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "privacy" / "index.md").write_text(
+        "---\n"
+        "title: Privacy API\n"
+        "---\n\n"
+        "## Background\n\n"
+        "### Implementing a provider\n\n"
+        "Plugins declare privacy providers for stored data.\n\n"
+        "## Plugins which do not store personal data\n\n"
+        "### Implementation requirements\n\n"
+        "Use the metadata provider or `null_provider` when the plugin does not store personal data.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="What do I need to implement for plugin privacy metadata?", top_k=3)
+    bundles = build_context_bundles(
+        db_path=db_path,
+        results=results[:1],
+        support_results=results,
+        query_text="What do I need to implement for plugin privacy metadata?",
+        bundle_max_tokens=220,
+    )
+
+    assert bundles[0].diagnostics["task_intent"] == "implementation_guide"
+    assert any("metadata provider" in chunk.content.lower() or "null_provider" in chunk.content.lower() for chunk in bundles[0].chunks)
 
 
 def test_query_prefers_behat_guide_over_mdk_workflow_for_docs_location_query(tmp_path: Path) -> None:

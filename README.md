@@ -445,6 +445,8 @@ The current concept-aware reranker is still deliberately small and explicit. For
 
 - conceptual Mustache or rendering queries prefer template and output explainer pages over narrower plugin-specific examples
 - renderer-only and docs-location queries prefer Output API sections over template examples when the user is really asking where renderers are documented
+- file-location and debugging queries prefer canonical implementation anchors such as `settings.php` and plugin `lang/en/...php` guidance over incidental mentions in checklists, coding-style pages, or app-only docs
+- flow-oriented queries such as “where does template rendering fit in the output flow?” now expand toward concepts like page output journey and renderable sections so explanatory pipeline docs beat narrower API snippets
 - conceptual events queries prefer the events concept pages and `db/events.php` explainer over incidental references such as calendar or xAPI pages
 - concept-heavy strings, privacy-provider, PHPUnit, and Behat queries prefer subsystem/testing explainers over broad checklists, workflow pages, or incidental mentions
 - broad plugin-type overview pages are demoted when a cleaner canonical explainer page is already in the candidate set
@@ -556,7 +558,9 @@ Task-oriented bundle completion is rule-based and inspectable:
 
 - file-location intent is detected from phrasing like `where do`, `what file`, `where is this defined`, or `where is this registered`
 - implementation-guide intent is detected from phrasing like `how do I implement`, `how do I write`, `how do I define`, or `how do I configure`
+- flow-oriented phrasing like `fit in the output flow` is treated separately so bundles stay explanatory instead of behaving like file-location lookups
 - support chunks are chosen with explicit file-anchor and concept-overlap heuristics rather than opaque semantic scoring
+- implementation-requirement bundles can add one compact support chunk for concrete requirements like privacy metadata providers or external service declarations when the primary match alone is too thin
 - `--explain-bundle` reports the detected task intent, whether a support chunk was added, which file anchors were surfaced, and whether the match had to be trimmed to stay inside budget
 
 Bundle usefulness is now measured explicitly in eval runs. The current heuristics are deliberately simple and inspectable:

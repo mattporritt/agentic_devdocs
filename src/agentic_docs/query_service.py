@@ -38,6 +38,8 @@ STOPWORDS = {
 TOKEN_ALIASES = {
     "add": ["adding"],
     "define": ["definition", "writing", "register"],
+    "wire": ["register", "declare", "external", "service"],
+    "wiring": ["register", "declare", "external", "service"],
     "language": ["lang"],
     "strings": ["string"],
     "string": ["strings", "lang", "pluginname", "get_string"],
@@ -53,6 +55,8 @@ TOKEN_ALIASES = {
     "validate": ["validation", "addrule", "rule", "rules"],
     "renderer": ["renderers", "rendering", "output"],
     "renderers": ["renderer", "rendering", "output"],
+    "rendering": ["renderers", "renderable", "output"],
+    "flow": ["journey", "renderable", "renderers"],
     "template": ["templates", "mustache"],
     "templates": ["template", "mustache"],
     "privacy": ["provider", "providers", "metadata"],
@@ -129,19 +133,24 @@ def classify_query_intent(query_text: str, tokens: list[str]) -> str:
 FILE_LOCATION_QUERY_PATTERN = re.compile(
     r"\b(where does|where do|where should|what file|where is this defined|where is this registered|where are|file location|location)\b"
 )
+FLOW_QUERY_PATTERN = re.compile(
+    r"\b(fit in the flow|output flow|render(?:ing)? flow|how is .*rendered|path from|flow from|render flow|how does moodle expect .*work)\b"
+)
 IMPLEMENTATION_QUERY_PATTERN = re.compile(
-    r"\b(how do i implement|how do i write|how do i add|how do i configure|how do i define|how do .*registered|how do .*declare)\b"
+    r"\b(how do i implement|how do i write|how do i add|how do i configure|how do i define|how do i wire up|what do i need to implement|how do .*registered|how do .*declare)\b"
 )
 FILE_ANCHOR_PATTERN = re.compile(r"`?([A-Za-z0-9_./-]+\.(?:php|mdx|md|js|mustache|yml))`?")
 
 
 def classify_task_intent(query_text: str, tokens: list[str]) -> str:
     lowered = query_text.lower()
+    if FLOW_QUERY_PATTERN.search(lowered):
+        return "flow_explainer"
     if FILE_LOCATION_QUERY_PATTERN.search(lowered):
         return "file_location"
     if IMPLEMENTATION_QUERY_PATTERN.search(lowered):
         return "implementation_guide"
-    if any(token in {"file", "registered", "defined", "location", "write", "implement", "configure"} for token in tokens):
+    if any(token in {"file", "registered", "defined", "location", "write", "implement", "configure", "wire"} for token in tokens):
         return "implementation_guide"
     return "general"
 
@@ -164,6 +173,8 @@ def _expanded_tokens(tokens: list[str]) -> list[str]:
 def _concept_families(tokens: list[str]) -> list[str]:
     expanded = set(_expanded_tokens(tokens))
     families: list[str] = []
+    if {"setting", "settings", "admin"} & expanded and {"plugin", "plugins"} & expanded:
+        families.append("admin_settings")
     if "upgrade" in expanded or "upgrade.php" in expanded:
         families.append("upgrade")
     if {"web", "service", "services", "external"} & expanded and {"service", "services", "external"} & expanded:
@@ -314,6 +325,7 @@ def _family_specific_bonus(result: QueryResult, profile: QueryProfile) -> float:
 
     path = result.source_file_path.lower()
     title = result.document_title.lower()
+    section_text = (result.section_title or "").lower()
     heading = " > ".join(result.heading_path).lower()
     expanded_tokens = set(profile.expanded_tokens)
     bonus = 0.0
@@ -327,6 +339,14 @@ def _family_specific_bonus(result: QueryResult, profile: QueryProfile) -> float:
             bonus += 4.0
         if _path_contains(path, "plugintypes"):
             bonus -= 12.0
+
+    if "admin_settings" in profile.concept_families:
+        if any(_path_contains(path, fragment) for fragment in ("subsystems/admin", "_files/settings-php")):
+            bonus += 18.0
+        if any(text in heading or text in title for text in ("settings.php", "admin settings", "settings")):
+            bonus += 8.0
+        if _path_contains(path, "plugintypes"):
+            bonus -= 10.0
 
     if "web_services" in profile.concept_families:
         if any(_path_contains(path, fragment) for fragment in ("subsystems/external/writing-a-service", "_files/db-services")):
@@ -346,16 +366,29 @@ def _family_specific_bonus(result: QueryResult, profile: QueryProfile) -> float:
                 bonus -= 8.0
             if _path_contains(path, "subsystems/external/index"):
                 bonus -= 4.0
+            if "version" in heading or "version" in section_text:
+                bonus -= 10.0
 
     if "language_strings" in profile.concept_families:
         if path.endswith("docs/apis/_files/lang.md") or _path_contains(path, "_files/lang.md"):
             bonus += 18.0
+            if profile.task_intent == "file_location":
+                bonus += 12.0
         if any(text in heading or text in title for text in ("language files", "language strings", "lang", "string api")):
+            bonus += 6.0
+        if profile.task_intent == "file_location" and any(text in heading or text in section_text for text in ("language files", "lang files", "lang")):
             bonus += 6.0
         if any(text in heading for text in ("dynamic strings", "working with strings")):
             bonus -= 8.0
         if any(_path_contains(path, fragment) for fragment in ("javascript", "string-deprecation", "plugincontribution/checklist")):
             bonus -= 8.0
+        if profile.task_intent == "file_location" and any(
+            _path_contains(path, fragment)
+            for fragment in ("general/app/development", "policies/codingstyle", "plugincontribution/checklist")
+        ):
+            bonus -= 14.0
+        if {"plugin", "plugins"} & expanded_tokens and _path_contains(path, "general/app"):
+            bonus -= 12.0
         if _path_contains(path, "plugintypes"):
             bonus -= 5.0
 
@@ -369,6 +402,8 @@ def _family_specific_bonus(result: QueryResult, profile: QueryProfile) -> float:
             bonus += 10.0
             if renderer_only_query:
                 bonus += 12.0
+            if profile.task_intent == "flow_explainer":
+                bonus += 14.0
         if title == "templates":
             bonus += 6.0
         elif title == "output api":
@@ -379,6 +414,21 @@ def _family_specific_bonus(result: QueryResult, profile: QueryProfile) -> float:
             bonus += 8.0
         elif "renderable" in heading:
             bonus += 4.0
+        if profile.task_intent == "flow_explainer":
+            if any(text in heading or text in section_text for text in ("renderers", "renderable", "page output journey", "output api")):
+                bonus += 10.0
+            if _path_contains(path, "subsystems/output") and any(
+                text in heading or text in section_text for text in ("page output journey", "renderable")
+            ):
+                bonus += 14.0
+            if {"output", "flow"} <= expanded_tokens and _path_contains(path, "subsystems/output"):
+                bonus += 18.0
+            if _path_contains(path, "guides/templates") and "templates" in heading and "render" not in heading:
+                bonus -= 6.0
+            if _path_contains(path, "guides/templates") and any(
+                text in heading or text in section_text for text in ("renderers", "rendering in php")
+            ):
+                bonus -= 8.0
         if renderer_only_query and "dependency injection" in heading:
             bonus -= 4.0
         if renderer_only_query and "output api" in heading:
@@ -417,6 +467,8 @@ def _family_specific_bonus(result: QueryResult, profile: QueryProfile) -> float:
             bonus += 18.0
         if any(text in heading or text in title for text in ("privacy provider", "metadata provider", "request provider")):
             bonus += 8.0
+        if "metadata" in expanded_tokens and any(text in heading or text in section_text for text in ("metadata provider", "implementation requirements")):
+            bonus += 10.0
         if "provider" in expanded_tokens and _path_contains(path, "providers") and not _path_contains(path, "privacy"):
             bonus -= 8.0
 
@@ -462,12 +514,14 @@ def _section_focus_bonus(
 
     if profile.intent == "conceptual" and section_focus >= max(2, title_overlap + 1):
         bonus += 4.0
+    if profile.task_intent == "flow_explainer" and (heading_overlap + section_phrase_hits + heading_phrase_hits) >= 2:
+        bonus += 5.0
     if phrase_focus > 0 and section_focus > 0:
         bonus += 3.0
 
     heading = " > ".join(result.heading_path).lower()
     section = (result.section_title or "").lower()
-    if any(text in heading or text in section for text in ("api", "validation", "renderers", "mustache", "language files", "phpunit", "behat", "privacy provider", "events")):
+    if any(text in heading or text in section for text in ("api", "validation", "renderers", "mustache", "language files", "phpunit", "behat", "privacy provider", "events", "page output journey", "implementation requirements", "settings.php")):
         bonus += 2.0
 
     return bonus
@@ -489,6 +543,8 @@ def _incidental_match_penalty(
     if any(text in heading or text in section for text in ("typical workflows", "getting started", "other features", "checklist", "coding")):
         return -6.0
     if any(text in heading for text in ("dynamic strings", "working with strings", "executing behat tests")):
+        return -8.0
+    if profile.task_intent == "implementation_guide" and any(text in heading for text in ("bump the plugin version", "version.php")):
         return -8.0
     if _path_contains(path, "subsystems/form/fields") and "forms_validation" in profile.concept_families and heading_overlap <= 1:
         return -6.0
@@ -936,12 +992,15 @@ def _expected_anchor_terms(profile: QueryProfile) -> list[str]:
         anchors.append("db/tasks.php")
     if {"service", "services", "external", "web"} & expanded:
         anchors.append("db/services.php")
+        anchors.append("External functions")
     if {"behat", "acceptance"} & expanded:
         anchors.append("Writing acceptance tests")
     if {"phpunit", "unit"} & expanded:
         anchors.append("Writing PHPUnit tests")
     if {"event", "events"} & expanded:
         anchors.append("db/events.php")
+    if {"privacy", "metadata"} <= expanded or ({"privacy", "metadata"} & expanded and "privacy" in expanded):
+        anchors.append("metadata provider")
     return anchors
 
 
@@ -973,6 +1032,9 @@ def _candidate_support_score(candidate: QueryResult, primary: QueryResult, profi
     expected = _expected_anchor_terms(profile)
     keyword_overlap = _support_keyword_overlap(candidate, profile)
 
+    if "web_services" in profile.concept_families and profile.task_intent == "implementation_guide" and "version" in heading_text:
+        return -100.0
+
     if candidate.document_id == primary.document_id:
         score += 4.0
     elif canonical_path_key(candidate.source_file_path) == canonical_path_key(primary.source_file_path):
@@ -990,6 +1052,9 @@ def _candidate_support_score(candidate: QueryResult, primary: QueryResult, profi
             score += 6.0
         if anchors:
             score += 4.0
+    if profile.task_intent == "flow_explainer":
+        if any(term in heading_text or term in section_text or term in title_text for term in ("renderers", "renderable", "page output journey", "output api", "templates")):
+            score += 8.0
 
     for expected_anchor in expected:
         if expected_anchor.lower() in candidate.content.lower():
@@ -997,12 +1062,22 @@ def _candidate_support_score(candidate: QueryResult, primary: QueryResult, profi
         if expected_anchor.lower() in heading_text or expected_anchor.lower() in section_text:
             score += 10.0
 
-    if "web-services" in profile.concept_families or "web_services" in profile.concept_families:
+    if "web_services" in profile.concept_families:
         if any(term in heading_text or term in section_text or term in title_text or term in path_text for term in ("service", "services", "external")):
             score += 8.0
+        if any(term in heading_text or term in section_text for term in ("function descriptions", "declare the web service function")):
+            score += 10.0
+        if "version" in heading_text:
+            score -= 20.0
     if "testing" in profile.concept_families:
         if any(term in heading_text or term in section_text or term in title_text for term in ("behat", "phpunit", "acceptance tests")):
             score += 8.0
+    if "privacy" in profile.concept_families and "metadata" in profile.expanded_tokens:
+        if any(term in heading_text or term in section_text or term in title_text for term in ("metadata provider", "implementation requirements", "null_provider")):
+            score += 12.0
+    if "output_templates" in profile.concept_families and profile.task_intent == "flow_explainer":
+        if any(term in heading_text or term in section_text for term in ("renderers", "renderable", "page output journey", "output api")):
+            score += 10.0
 
     if candidate.source_file_path == primary.source_file_path and candidate.section_id != primary.section_id:
         score += 4.0
