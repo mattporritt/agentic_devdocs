@@ -181,8 +181,11 @@ def parse_markdown_document(path: Path, root: Path, repo_commit_hash: str | None
     )
     metadata = DocumentMetadata(
         source_path=relative_path,
+        source_type="repo_markdown",
+        source_name="devdocs_repo",
         repo_commit_hash=repo_commit_hash,
         last_modified_time=datetime.fromtimestamp(path.stat().st_mtime, tz=timezone.utc),
         file_hash=file_hash,
+        content_hash=file_hash,
     )
     return DocumentModel(id=document_id, title=title, metadata=metadata, sections=sections)

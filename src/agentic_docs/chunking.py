@@ -179,7 +179,12 @@ def _build_chunk(
         document_id=document.id,
         document_title=document.title,
         source_path=document.metadata.source_path,
+        source_type=document.metadata.source_type,
+        source_name=document.metadata.source_name,
+        source_url=document.metadata.source_url,
+        canonical_url=document.metadata.canonical_url,
         repo_commit_hash=document.metadata.repo_commit_hash,
+        scrape_timestamp=document.metadata.scrape_timestamp,
         section_title=section.section_title,
         heading_path=section.heading_path,
     )

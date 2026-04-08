@@ -12,9 +12,15 @@ class DocumentMetadata(BaseModel):
     """Metadata captured for an ingested source document."""
 
     source_path: str
+    source_type: str = "repo_markdown"
+    source_name: str | None = None
+    source_url: str | None = None
+    canonical_url: str | None = None
     repo_commit_hash: str | None = None
     last_modified_time: datetime | None = None
+    scrape_timestamp: datetime | None = None
     file_hash: str
+    content_hash: str | None = None
 
 
 class SectionModel(BaseModel):
@@ -44,7 +50,12 @@ class ChunkMetadata(BaseModel):
     document_id: str
     document_title: str
     source_path: str
+    source_type: str = "repo_markdown"
+    source_name: str | None = None
+    source_url: str | None = None
+    canonical_url: str | None = None
     repo_commit_hash: str | None = None
+    scrape_timestamp: datetime | None = None
     section_title: str | None = None
     heading_path: list[str] = Field(default_factory=list)
 

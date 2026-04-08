@@ -14,6 +14,7 @@ from agentic_docs.evaluation import render_eval_text, run_eval
 from agentic_docs.git_sync import current_commit_hash, git_head_commit, git_working_tree_status, sync_repository
 from agentic_docs.ingest import ingest_source
 from agentic_docs.query_service import build_context_bundles, query_chunks
+from agentic_docs.site_ingest import ingest_site_source
 from agentic_docs.storage import SQLiteStore
 
 app = typer.Typer(help="Ingest markdown docs into agent-friendly retrieval artifacts.")
@@ -143,6 +144,29 @@ def ingest(
     _emit(result, json_output)
 
 
+@app.command("ingest-site")
+def ingest_site(
+    base_url: Annotated[str, typer.Option(help="Website base URL to scrape.")] = "https://design.moodle.com",
+    db_path: Annotated[Path, typer.Option(help="SQLite database path.")] = Path("./_smoke_test/design-system.db"),
+    tokenizer: Annotated[str, typer.Option(help="Tokenizer adapter to use.")] = "openai",
+    max_tokens: Annotated[int, typer.Option(help="Maximum tokens per chunk.")] = 400,
+    overlap_tokens: Annotated[int, typer.Option(help="Overlap tokens between adjacent chunks.")] = 60,
+    max_pages: Annotated[int | None, typer.Option(help="Optional limit for the number of in-scope pages to ingest.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
+) -> None:
+    """Scrape a bounded website source and index it into SQLite."""
+
+    result = ingest_site_source(
+        base_url=base_url,
+        db_path=db_path,
+        tokenizer_name=tokenizer,
+        max_tokens=max_tokens,
+        overlap_tokens=overlap_tokens,
+        max_pages=max_pages,
+    )
+    _emit(result, json_output)
+
+
 @app.command()
 def query(
     query_text: Annotated[str, typer.Argument(help="Free-text query string.")],
@@ -230,6 +254,14 @@ def stats(
         return
     overview = data["overview"]
     _emit(overview, False)
+    if data.get("sources"):
+        typer.echo("")
+        typer.echo("sources:")
+        for row in data["sources"]:
+            source_name = row["source_name"] or "-"
+            typer.echo(
+                f"- {row['source_type']} / {source_name}: docs={row['document_count']} sections={row['section_count']} chunks={row['chunk_count']}"
+            )
     typer.echo("")
     typer.echo("top_documents_by_chunk_count:")
     for row in data["chunks_per_document"]:
@@ -338,6 +370,67 @@ def verify_devdocs(
         "db_path": str(db_path),
         "working_tree": working_tree,
         "repo_commit_hash": repo_commit_hash,
+        "ingest": ingest_result,
+        "stats": SQLiteStore(db_path).detailed_stats(limit=5),
+        "smoke_queries": smoke_results,
+        "eval": eval_report.model_dump() if eval_report is not None else None,
+        "validation_status": validation_status,
+    }
+    _emit(payload, json_output)
+
+
+@app.command("verify-site")
+def verify_site(
+    base_url: Annotated[str, typer.Option(help="Website base URL to scrape.")] = "https://design.moodle.com",
+    db_path: Annotated[Path, typer.Option(help="SQLite database path.")] = Path("./_smoke_test/design-system.db"),
+    eval_file: Annotated[Path | None, typer.Option(help="Optional eval YAML/JSON to run after ingest for a single-source-of-truth validation payload.")] = None,
+    tokenizer: Annotated[str, typer.Option(help="Tokenizer adapter to use.")] = "openai",
+    max_tokens: Annotated[int, typer.Option(help="Maximum tokens per chunk.")] = 400,
+    overlap_tokens: Annotated[int, typer.Option(help="Overlap tokens between adjacent chunks.")] = 60,
+    max_pages: Annotated[int | None, typer.Option(help="Optional limit for the number of in-scope pages to ingest.")] = None,
+    with_bundles: Annotated[bool, typer.Option(help="Evaluate bundle usefulness as part of the validation payload.")] = True,
+    bundle_max_tokens: Annotated[int, typer.Option(help="Maximum tokens for evaluated context bundles in validation.")] = 450,
+    baseline: Annotated[Path | None, typer.Option(help="Optional prior eval.json or verify artifact to compare against.")] = None,
+    allow_dirty: Annotated[bool, typer.Option(help="Allow validation to run from a dirty git working tree.")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
+) -> None:
+    """Run a repeatable ingest, stats, and smoke-query workflow for the design-system site."""
+
+    workspace_path = Path(os.getcwd())
+    working_tree = _validation_worktree_payload(workspace_path, allow_dirty=allow_dirty)
+    ingest_result = ingest_site_source(
+        base_url=base_url,
+        db_path=db_path,
+        tokenizer_name=tokenizer,
+        max_tokens=max_tokens,
+        overlap_tokens=overlap_tokens,
+        max_pages=max_pages,
+    )
+    smoke_queries = [
+        "design tokens for developers",
+        "semantic colour tokens",
+        "icon library",
+    ]
+    smoke_results = {
+        query_text: [result.model_dump() for result in query_chunks(db_path=db_path, query_text=query_text, top_k=3)]
+        for query_text in smoke_queries
+    }
+    eval_report = (
+        run_eval(
+            db_path=db_path,
+            eval_file=eval_file,
+            with_bundles=with_bundles,
+            bundle_max_tokens=bundle_max_tokens,
+            baseline=baseline,
+        )
+        if eval_file is not None
+        else None
+    )
+    validation_status = _validation_summary_status(eval_report)
+    payload = {
+        "base_url": base_url,
+        "db_path": str(db_path),
+        "working_tree": working_tree,
         "ingest": ingest_result,
         "stats": SQLiteStore(db_path).detailed_stats(limit=5),
         "smoke_queries": smoke_results,

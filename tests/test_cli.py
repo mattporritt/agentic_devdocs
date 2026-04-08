@@ -538,3 +538,145 @@ def test_cli_verify_devdocs_runs_eval_sequentially_and_records_cleanliness(
         payload["eval"]["bundle_overall"]["partial"] > 0 or payload["eval"]["bundle_overall"]["insufficient"] > 0
     )
     assert payload["validation_status"]["baseline_comparison"]["status"] == "not_compared"
+
+
+def test_cli_ingest_site_uses_site_ingestion_path(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    db_path = tmp_path / "design.db"
+    monkeypatch.setattr(
+        "agentic_docs.cli.ingest_site_source",
+        lambda **kwargs: {
+            "documents": 3,
+            "sections": 7,
+            "chunks": 9,
+            "source_type": "scraped_web",
+            "source_name": "design_system",
+            "base_url": kwargs["base_url"],
+        },
+    )
+
+    result = runner.invoke(
+        app,
+        [
+            "ingest-site",
+            "--base-url",
+            "https://design.moodle.com",
+            "--db-path",
+            str(db_path),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["documents"] == 3
+    assert payload["source_type"] == "scraped_web"
+    assert payload["source_name"] == "design_system"
+
+
+def test_cli_verify_site_runs_eval_sequentially_and_records_source_stats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "design_system" / "foundation").mkdir(parents=True)
+    (docs_dir / "design_system" / "foundation" / "colours-32c91c.site").write_text(
+        "placeholder",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "design.db"
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: colors",
+                "    query: Where are semantic colour tokens documented?",
+                "    preferred_document_paths:",
+                "      - design_system/foundation/colours-32c91c.site",
+            ]
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        "agentic_docs.cli._validation_worktree_payload",
+        lambda _path, allow_dirty: {
+            "repo_path": str(tmp_path),
+            "repo_head_commit": "tool-commit",
+            "is_git_repo": True,
+            "clean": True,
+            "allow_dirty": allow_dirty,
+            "status_lines": [],
+            "mode": "clean",
+        },
+    )
+
+    def fake_ingest_site_source(**_kwargs: object) -> dict[str, object]:
+        from agentic_docs.chunking import chunk_document
+        from agentic_docs.models import DocumentMetadata, DocumentModel, SectionModel
+        from agentic_docs.storage import SQLiteStore
+        from agentic_docs.tokenizers import get_tokenizer
+
+        store = SQLiteStore(db_path)
+        store.initialize()
+        store.reindex()
+        document = DocumentModel(
+            id="site-doc",
+            title="Colours",
+            metadata=DocumentMetadata(
+                source_path="design_system/foundation/colours-32c91c.site",
+                source_type="scraped_web",
+                source_name="design_system",
+                source_url="https://design.moodle.com/98292f05f/p/32c91c",
+                canonical_url="https://design.moodle.com/98292f05f/p/32c91c",
+                file_hash="hash",
+                content_hash="hash",
+            ),
+            sections=[
+                SectionModel(
+                    id="site-sec",
+                    document_id="site-doc",
+                    section_order=0,
+                    section_title="Semantic colour tokens",
+                    heading_level=2,
+                    heading_path=["Colours", "Semantic colour tokens"],
+                    content="Use semantic tokens.",
+                )
+            ],
+        )
+        chunks = chunk_document(
+            document=document,
+            tokenizer=get_tokenizer("openai"),
+            max_tokens=400,
+            overlap_tokens=60,
+        )
+        store.store_document(document, chunks)
+        return {
+            "documents": 1,
+            "sections": 1,
+            "chunks": len(chunks),
+            "source_type": "scraped_web",
+            "source_name": "design_system",
+            "base_url": "https://design.moodle.com",
+        }
+
+    monkeypatch.setattr("agentic_docs.cli.ingest_site_source", fake_ingest_site_source)
+
+    result = runner.invoke(
+        app,
+        [
+            "verify-site",
+            "--base-url",
+            "https://design.moodle.com",
+            "--db-path",
+            str(db_path),
+            "--eval-file",
+            str(eval_file),
+            "--json",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(result.stdout)
+    assert payload["ingest"]["source_type"] == "scraped_web"
+    assert payload["stats"]["sources"][0]["chunk_count"] >= 1
+    assert payload["eval"]["total_queries"] == 1

@@ -9,6 +9,7 @@ The current phase focuses on three things:
 - concept-aware retrieval that can surface the right explanatory section
 - compact context bundles that are useful to downstream coding agents
 - bundle and retrieval diagnostics that make tuning more actionable
+- extending ingestion beyond the devdocs git repo to the live Moodle Design System site
 
 The current evaluation flow is intentionally stricter than earlier iterations:
 
@@ -47,6 +48,7 @@ Included currently:
 
 - git repository sync
 - markdown discovery and parsing
+- bounded live-site scraping for `design.moodle.com`
 - canonical document/section models
 - token-aware chunking with overlap
 - SQLite persistence with explicit tables
@@ -63,7 +65,7 @@ Still deferred:
 
 - HTTP API
 - embeddings or vector search
-- non-markdown formats
+- broad non-markdown format support beyond the design-system scraper
 - Moodle-specific semantic enrichment
 
 ## Architecture overview
@@ -80,11 +82,13 @@ Pipeline:
 8. Concept-heavy queries can receive concept-family and section-focus boosts so explanatory sections beat incidental mentions more often.
 9. Implementation-oriented concept families such as web services can also prefer concrete how-to sections over broader overview pages when the query is asking how to define or register something.
 10. `query`, `stats`, inspect commands, and `eval` expose the corpus in a debuggable way, including ranking diagnostics for weak passes.
+11. `ingest-site` reuses the same canonical schema for the live Moodle Design System docs by fetching the shared-view JSON payload from `design.moodle.com`.
 
 Core modules:
 
 - `agentic_docs.git_sync`: clone/update repositories and record commit hashes
 - `agentic_docs.parser`: markdown discovery and heading-aware section extraction
+- `agentic_docs.site_ingest`: bounded design-system scraping and ProseMirror-to-section extraction
 - `agentic_docs.models`: canonical Pydantic models
 - `agentic_docs.tokenizers`: tokenizer abstraction plus OpenAI/tiktoken adapter
 - `agentic_docs.chunking`: token-aware retrieval chunk construction
@@ -159,6 +163,17 @@ agentic-docs ingest \
   --overlap-tokens 60
 ```
 
+Ingest the live Moodle Design System site:
+
+```bash
+agentic-docs ingest-site \
+  --base-url https://design.moodle.com \
+  --db-path ./_data/design-system.db \
+  --tokenizer openai \
+  --max-tokens 400 \
+  --overlap-tokens 60
+```
+
 Inspect counts:
 
 ```bash
@@ -201,6 +216,25 @@ agentic-docs eval \
   --show-bundle-details
 ```
 
+Run the starter design-system verification slice:
+
+```bash
+agentic-docs verify-site \
+  --base-url https://design.moodle.com \
+  --db-path ./_smoke_test/design-system.db \
+  --eval-file ./evals/design_system_eval.yaml \
+  --with-bundles
+```
+
+The starter design-system slice currently checks a small but real set of site topics:
+
+- CSS token consumption guidance for developers
+- semantic colour tokens
+- icon library guidance
+- layout breakpoints
+
+It is intentionally a proof slice rather than a full second benchmark.
+
 ## CLI commands
 
 ### `sync`
@@ -227,6 +261,39 @@ Useful flags:
 - `--overlap-tokens`: shared tail context between adjacent chunks
 - `--json`: machine-readable output
 
+### `ingest-site`
+
+Scrape a bounded website source and index it into the same canonical SQLite schema.
+
+```bash
+agentic-docs ingest-site --base-url https://design.moodle.com --db-path <path> --tokenizer openai
+```
+
+Useful flags:
+
+- `--max-pages`: optional limit for a small smoke run
+- `--max-tokens`: target upper bound for each retrieval chunk
+- `--overlap-tokens`: shared tail context between adjacent chunks
+- `--json`: machine-readable output
+
+The current site ingester is intentionally narrow and grounded in the real `design.moodle.com` Zeroheight structure:
+
+- it fetches the public shared-view shell page
+- extracts `window.styleguideDetails` and `window.USER_INFO`
+- calls the shared `load_pages` JSON endpoint
+- converts page intro/body ProseMirror content into the same document/section/chunk schema used for repo docs
+
+It does not try to be a generic crawler platform.
+
+Stored provenance for scraped pages includes:
+
+- `source_type=scraped_web`
+- `source_name=design_system`
+- `source_url`
+- `canonical_url`
+- `scrape_timestamp`
+- `content_hash`
+
 ### `query`
 
 Run lexical retrieval against indexed chunks.
@@ -251,6 +318,7 @@ Returned data includes:
 - score
 - content
 - source file path
+- source type and source URL in `metadata_json` when available
 - document title
 - section title
 - heading path
@@ -267,6 +335,8 @@ Show counts for documents, sections, and chunks.
 ```bash
 agentic-docs stats --db-path <path>
 ```
+
+Stats are now source-aware. In JSON output, `sources` summarizes document/section/chunk counts by `source_type` and `source_name`.
 
 Stats now include:
 
@@ -285,6 +355,8 @@ Inspect an individual chunk and its metadata.
 agentic-docs inspect-chunk <chunk-id> --db-path <path>
 ```
 
+Chunk inspection includes serialized provenance metadata such as `source_type`, `source_name`, `source_url`, and `canonical_url` when the source provides them.
+
 ### `inspect-doc`
 
 Inspect a document and its extracted sections.
@@ -292,6 +364,8 @@ Inspect a document and its extracted sections.
 ```bash
 agentic-docs inspect-doc <document-id> --db-path <path>
 ```
+
+Document inspection exposes stored source metadata directly from the `documents` table, including repo commit hashes for git sources and scrape timestamps/URLs for site sources.
 
 ### `verify-devdocs`
 
@@ -341,6 +415,19 @@ agentic-docs verify-devdocs \
   --eval-file ./evals/moodle_devdocs_eval.yaml \
   --baseline ./verification_runs/2026-04-07_15-50-20/verify_devdocs.json
 ```
+
+### `verify-site`
+
+Run the equivalent sequential verification workflow for the live Moodle Design System site.
+
+```bash
+agentic-docs verify-site \
+  --base-url https://design.moodle.com \
+  --db-path ./_smoke_test/design-system.db \
+  --eval-file ./evals/design_system_eval.yaml
+```
+
+This command reuses the same validation semantics as `verify-devdocs`, but the ingestion source is the live shared design-system site instead of a git checkout.
 
 ### `eval`
 

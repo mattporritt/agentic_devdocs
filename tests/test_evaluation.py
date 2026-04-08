@@ -96,6 +96,14 @@ def test_load_eval_cases_from_yaml(tmp_path: Path) -> None:
     assert cases[0].max_reasonable_bundle_tokens == 220
 
 
+def test_load_design_system_eval_fixture() -> None:
+    cases = load_eval_cases(Path("evals/design_system_eval.yaml"))
+
+    assert len(cases) >= 4
+    assert {case.bucket for case in cases} >= {"design-system-developers", "design-system-foundations"}
+    assert {case.query_style for case in cases} >= {"implementation", "conceptual", "file_location"}
+
+
 def test_run_eval_scores_hits(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     (docs_dir / "apis" / "subsystems" / "admin").mkdir(parents=True)

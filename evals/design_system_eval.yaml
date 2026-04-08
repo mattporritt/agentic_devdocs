@@ -1,0 +1,60 @@
+cases:
+  - id: design-system-css-tokens
+    bucket: design-system-developers
+    query_style: implementation
+    concept_id: css-tokens
+    query: How do I use CSS tokens from the Moodle design system?
+    preferred_document_paths:
+      - design_system/start-here/for-developers-98e3cb.site
+    preferred_heading_substrings:
+      - CSS Tokens (Recommended)
+    preferred_heading_substrings_for_bundle:
+      - CSS Tokens (Recommended)
+    required_heading_substrings_for_bundle:
+      - CSS tokens
+    notes: Prefer the implementation-oriented developer guidance for consuming tokens.
+
+  - id: design-system-semantic-colours
+    bucket: design-system-foundations
+    query_style: conceptual
+    concept_id: semantic-colour-tokens
+    query: What are semantic colour tokens?
+    preferred_document_paths:
+      - design_system/styles/colours-32c91c.site
+    preferred_heading_substrings:
+      - Semantic colour tokens
+    preferred_heading_substrings_for_bundle:
+      - Semantic colour tokens
+    required_heading_substrings_for_bundle:
+      - Semantic colour tokens
+    notes: Should land on the Colours token guidance rather than designer quickstart mentions.
+
+  - id: design-system-icon-library
+    bucket: design-system-foundations
+    query_style: file_location
+    concept_id: icon-library
+    query: Where is the Moodle icon library documented?
+    preferred_document_paths:
+      - design_system/styles/icons-385957.site
+    preferred_heading_substrings:
+      - Icon library
+    preferred_heading_substrings_for_bundle:
+      - Icon library
+    required_heading_substrings_for_bundle:
+      - Icon library
+    notes: The icons page contains the actual library overview.
+
+  - id: design-system-breakpoints
+    bucket: design-system-foundations
+    query_style: conceptual
+    concept_id: breakpoints
+    query: Where are Moodle breakpoints documented?
+    preferred_document_paths:
+      - design_system/styles/layout-889e50.site
+    preferred_heading_substrings:
+      - Breakpoints
+    preferred_heading_substrings_for_bundle:
+      - Breakpoints
+    required_heading_substrings_for_bundle:
+      - Breakpoints
+    notes: Layout page sections describe the breakpoint scale and usage guidance.

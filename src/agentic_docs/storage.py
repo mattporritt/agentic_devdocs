@@ -16,9 +16,15 @@ CREATE TABLE IF NOT EXISTS documents (
     id TEXT PRIMARY KEY,
     source_path TEXT NOT NULL UNIQUE,
     title TEXT NOT NULL,
+    source_type TEXT NOT NULL DEFAULT 'repo_markdown',
+    source_name TEXT,
+    source_url TEXT,
+    canonical_url TEXT,
     repo_commit_hash TEXT,
     last_modified_time TEXT,
-    file_hash TEXT NOT NULL
+    scrape_timestamp TEXT,
+    file_hash TEXT NOT NULL,
+    content_hash TEXT
 );
 
 CREATE TABLE IF NOT EXISTS sections (
@@ -68,6 +74,27 @@ class SQLiteStore:
     def initialize(self) -> None:
         with self.connect() as connection:
             connection.executescript(SCHEMA)
+            self._ensure_document_columns(connection)
+            connection.commit()
+
+    def _ensure_document_columns(self, connection: sqlite3.Connection) -> None:
+        """Keep local SQLite stores forward-compatible as metadata evolves."""
+
+        existing_columns = {
+            row["name"] for row in connection.execute("PRAGMA table_info(documents)").fetchall()
+        }
+        required_columns = {
+            "source_type": "TEXT NOT NULL DEFAULT 'repo_markdown'",
+            "source_name": "TEXT",
+            "source_url": "TEXT",
+            "canonical_url": "TEXT",
+            "scrape_timestamp": "TEXT",
+            "content_hash": "TEXT",
+        }
+        for column, ddl in required_columns.items():
+            if column in existing_columns:
+                continue
+            connection.execute(f"ALTER TABLE documents ADD COLUMN {column} {ddl}")
 
     def reindex(self) -> None:
         with self.connect() as connection:
@@ -84,16 +111,23 @@ class SQLiteStore:
             connection.execute(
                 """
                 INSERT OR REPLACE INTO documents (
-                    id, source_path, title, repo_commit_hash, last_modified_time, file_hash
-                ) VALUES (?, ?, ?, ?, ?, ?)
+                    id, source_path, title, source_type, source_name, source_url, canonical_url,
+                    repo_commit_hash, last_modified_time, scrape_timestamp, file_hash, content_hash
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 """,
                 (
                     document.id,
                     document.metadata.source_path,
                     document.title,
+                    document.metadata.source_type,
+                    document.metadata.source_name,
+                    document.metadata.source_url,
+                    document.metadata.canonical_url,
                     document.metadata.repo_commit_hash,
                     document.metadata.last_modified_time.isoformat() if document.metadata.last_modified_time else None,
+                    document.metadata.scrape_timestamp.isoformat() if document.metadata.scrape_timestamp else None,
                     document.metadata.file_hash,
+                    document.metadata.content_hash or document.metadata.file_hash,
                 ),
             )
             for section in document.sections:
@@ -485,8 +519,24 @@ class SQLiteStore:
                 """,
                 (limit,),
             ).fetchall()
+            source_counts = connection.execute(
+                """
+                SELECT
+                    d.source_type,
+                    COALESCE(d.source_name, '') AS source_name,
+                    COUNT(DISTINCT d.id) AS document_count,
+                    COUNT(DISTINCT s.id) AS section_count,
+                    COUNT(c.id) AS chunk_count
+                FROM documents d
+                LEFT JOIN sections s ON s.document_id = d.id
+                LEFT JOIN chunks c ON c.section_id = s.id
+                GROUP BY d.source_type, COALESCE(d.source_name, '')
+                ORDER BY chunk_count DESC, d.source_type ASC, source_name ASC
+                """
+            ).fetchall()
         return {
             "overview": overview,
+            "sources": [dict(row) for row in source_counts],
             "chunks_per_document": [dict(row) for row in chunks_per_document],
             "largest_chunks": [dict(row) for row in largest_chunks],
             "small_chunks": [dict(row) for row in small_chunks],
