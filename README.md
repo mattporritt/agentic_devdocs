@@ -429,6 +429,13 @@ agentic-docs verify-site \
 
 This command reuses the same validation semantics as `verify-devdocs`, but the ingestion source is the live shared design-system site instead of a git checkout.
 
+The first narrow tuning pass for the design-system starter slice targeted a single CSS-token developer case. The root cause was not ingestion or recall: the preferred `For Developers > Using tokens > Token Consumption > CSS Tokens` section was already retrieved, but a broader `For Designers` library setup hit won rank 1 and drove an insufficient bundle. The fix stays source-aware and explicit:
+
+- design-system token queries now prefer developer token-consumption sections over designer quickstart/library setup sections
+- very small design-system token bundles can add one same-page support chunk such as `Import` to stay compact while becoming usable
+
+After that pass, the starter design-system slice is fully green and the existing devdocs benchmark remains stable.
+
 ### `eval`
 
 Run the lightweight retrieval evaluation harness.

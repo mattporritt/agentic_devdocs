@@ -64,6 +64,13 @@ def test_build_query_profile_detects_flow_and_requirement_intents() -> None:
     assert "privacy" in requirement_profile.concept_families
 
 
+def test_build_query_profile_detects_design_system_family() -> None:
+    profile = build_query_profile("How do I use CSS tokens from the Moodle design system?")
+
+    assert profile.intent == "conceptual"
+    assert "design_system" in profile.concept_families
+
+
 def test_query_chunks_and_context_bundle(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
@@ -840,3 +847,75 @@ def test_query_prefers_form_validation_section_over_field_reference(tmp_path: Pa
     assert results[0].source_file_path == "apis/subsystems/form/index.md"
     assert float(results[0].rerank_breakdown["family_specific_bonus"]) > 0
     assert float(results[1].rerank_breakdown["incidental_penalty"]) < 0
+
+
+def test_query_prefers_design_system_developer_css_tokens_over_designer_library_page(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "design_system" / "start-here").mkdir(parents=True)
+    (docs_dir / "design_system" / "start-here" / "for-designers-0808cf.md").write_text(
+        "# For Designers\n\n"
+        "## Quickstart\n\n"
+        "### Set up the Moodle Design System library (Community)\n\n"
+        "Open the Figma community library to start using the Moodle design system foundations.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "design_system" / "start-here" / "for-developers-98e3cb.md").write_text(
+        "# For Developers\n\n"
+        "## Using tokens\n\n"
+        "### Token Consumption\n\n"
+        "#### CSS Tokens (Recommended)\n\n"
+        "CSS tokens provide easily consumable variables for developers.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(
+        db_path=db_path,
+        query_text="How do I use CSS tokens from the Moodle design system?",
+        top_k=2,
+    )
+
+    assert results[0].source_file_path == "design_system/start-here/for-developers-98e3cb.md"
+    assert "design_system" in results[0].rerank_breakdown["concept_families"]
+    assert float(results[0].rerank_breakdown["family_specific_bonus"]) > float(
+        results[1].rerank_breakdown["family_specific_bonus"]
+    )
+
+
+def test_bundle_uses_design_system_css_tokens_primary_result(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "design_system" / "start-here").mkdir(parents=True)
+    (docs_dir / "design_system" / "start-here" / "for-designers-0808cf.md").write_text(
+        "# For Designers\n\n"
+        "## Quickstart\n\n"
+        "### Set up the Moodle Design System library (Community)\n\n"
+        "Open the Figma library to start using Moodle design foundations.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "design_system" / "start-here" / "for-developers-98e3cb.md").write_text(
+        "# For Developers\n\n"
+        "## Using tokens\n\n"
+        "### Token Consumption\n\n"
+        "#### CSS Tokens (Recommended)\n\n"
+        "CSS tokens provide easily consumable variables that developers can use in implementation agnostic environments.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(
+        db_path=db_path,
+        query_text="How do I use CSS tokens from the Moodle design system?",
+        top_k=3,
+    )
+    bundles = build_context_bundles(
+        db_path=db_path,
+        results=results[:1],
+        support_results=results,
+        query_text="How do I use CSS tokens from the Moodle design system?",
+        bundle_max_tokens=220,
+    )
+
+    assert bundles[0].source_file_path == "design_system/start-here/for-developers-98e3cb.md"
+    assert bundles[0].chunks[0].heading_path[-1] == "CSS Tokens (Recommended)"

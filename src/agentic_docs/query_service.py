@@ -173,6 +173,21 @@ def _expanded_tokens(tokens: list[str]) -> list[str]:
 def _concept_families(tokens: list[str]) -> list[str]:
     expanded = set(_expanded_tokens(tokens))
     families: list[str] = []
+    if {"design", "system"} <= expanded and {
+        "token",
+        "tokens",
+        "css",
+        "scss",
+        "semantic",
+        "colour",
+        "color",
+        "icon",
+        "icons",
+        "layout",
+        "breakpoints",
+        "breakpoint",
+    } & expanded:
+        families.append("design_system")
     if {"setting", "settings", "admin"} & expanded and {"plugin", "plugins"} & expanded:
         families.append("admin_settings")
     if "upgrade" in expanded or "upgrade.php" in expanded:
@@ -495,6 +510,28 @@ def _family_specific_bonus(result: QueryResult, profile: QueryProfile) -> float:
             bonus += 10.0
         if _path_contains(path, "subsystems/form/fields") and "validation" not in heading:
             bonus -= 10.0
+
+    if "design_system" in profile.concept_families:
+        if path.startswith("design_system/"):
+            bonus += 6.0
+        if _path_contains(path, "for-developers") or "for developers" in heading or "for developers" in title:
+            bonus += 8.0
+        if _path_contains(path, "for-designers") or "for designers" in heading or "for designers" in title:
+            bonus -= 4.0
+        if {"css", "token"} <= expanded_tokens or {"css", "tokens"} <= expanded_tokens:
+            if any(text in heading or text in section_text for text in ("token consumption", "css tokens")):
+                bonus += 18.0
+            if any(text in heading or text in section_text for text in ("library", "community", "figma")):
+                bonus -= 16.0
+        if {"semantic", "colour"} <= expanded_tokens or {"semantic", "color"} <= expanded_tokens:
+            if "semantic colour tokens" in heading or "semantic colour tokens" in section_text:
+                bonus += 14.0
+        if "icon" in expanded_tokens or "icons" in expanded_tokens:
+            if "icon library" in heading or "icon library" in section_text:
+                bonus += 14.0
+        if "breakpoint" in expanded_tokens or "breakpoints" in expanded_tokens:
+            if "breakpoints" in heading or "breakpoints" in section_text:
+                bonus += 14.0
 
     return bonus
 
@@ -823,7 +860,7 @@ def build_context_bundles(
                 if not added:
                     break
         support_diagnostic: dict[str, str | int | list[str] | bool] = {}
-        if profile is not None and profile.task_intent != "general" and bundle_max_tokens > total_tokens:
+        if _should_add_support_chunk(profile, result, bundle_max_tokens, total_tokens):
             extra_support_chunks: list[QueryResult] = []
             support_doc_ids: set[str] = set()
             for candidate in support_pool[: min(len(support_pool), 5)]:
@@ -942,6 +979,7 @@ def build_context_bundles(
                     "truncated": selection_strategy == "truncated_match",
                     "duplicate_chunk_count": _bundle_duplicate_count(ordered_chunks),
                     "task_intent": profile.task_intent if profile is not None else "general",
+                    "concept_families": profile.concept_families if profile is not None else [],
                     **support_diagnostic,
                 },
             )
@@ -1029,6 +1067,7 @@ def _candidate_support_score(candidate: QueryResult, primary: QueryResult, profi
     section_text = (candidate.section_title or "").lower()
     title_text = candidate.document_title.lower()
     path_text = candidate.source_file_path.lower()
+    content_text = candidate.content.lower()
     expected = _expected_anchor_terms(profile)
     keyword_overlap = _support_keyword_overlap(candidate, profile)
 
@@ -1078,6 +1117,30 @@ def _candidate_support_score(candidate: QueryResult, primary: QueryResult, profi
     if "output_templates" in profile.concept_families and profile.task_intent == "flow_explainer":
         if any(term in heading_text or term in section_text for term in ("renderers", "renderable", "page output journey", "output api")):
             score += 10.0
+    if "design_system" in profile.concept_families:
+        if path_text.startswith("design_system/"):
+            score += 4.0
+        if any(
+            term in heading_text or term in section_text
+            for term in (
+                "token consumption",
+                "css tokens",
+                "usage",
+                "import",
+                "benefits",
+                "semantic colour tokens",
+                "icon library",
+                "breakpoints",
+            )
+        ):
+            score += 8.0
+        if any(term in heading_text or term in section_text for term in ("library", "community")) or "figma" in content_text:
+            score -= 12.0
+        if {"css", "token"} <= set(profile.expanded_tokens) or {"css", "tokens"} <= set(profile.expanded_tokens):
+            if "css tokens" in heading_text or "css tokens" in section_text:
+                score += 10.0
+            if "scss tokens" in heading_text or "scss tokens" in section_text:
+                score -= 6.0
 
     if candidate.source_file_path == primary.source_file_path and candidate.section_id != primary.section_id:
         score += 4.0
@@ -1132,3 +1195,15 @@ def _select_task_support_chunk(
     if _candidate_support_score(best, primary, profile) <= 0:
         return None
     return best
+
+
+def _should_add_support_chunk(profile: QueryProfile | None, primary: QueryResult, bundle_max_tokens: int, total_tokens: int) -> bool:
+    if profile is None or bundle_max_tokens <= total_tokens:
+        return False
+    if profile.task_intent != "general":
+        return True
+    return (
+        "design_system" in profile.concept_families
+        and primary.source_file_path.lower().startswith("design_system/")
+        and primary.token_count < 40
+    )
