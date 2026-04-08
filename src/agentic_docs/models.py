@@ -121,6 +121,7 @@ class EvalCase(BaseModel):
     id: str
     query: str
     bucket: str = "uncategorized"
+    query_style: str | None = None
     concept_id: str | None = None
     description: str | None = None
     preferred_document_paths: list[str] = Field(default_factory=list)
@@ -168,6 +169,7 @@ class EvalOutcome(BaseModel):
     case_id: str
     query: str
     bucket: str
+    query_style: str | None = None
     concept_id: str | None = None
     top_k: int
     grade: str
@@ -210,6 +212,7 @@ class EvalReport(BaseModel):
     top_3: EvalWindowStats
     top_5: EvalWindowStats
     buckets: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
+    query_styles: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
     concepts: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
     bundle_overall: "BundleGradeStats | None" = None
     bundle_buckets: dict[str, "BundleGradeStats"] = Field(default_factory=dict)

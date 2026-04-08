@@ -466,6 +466,7 @@ The eval file lives at [evals/moodle_devdocs_eval.yaml](/Users/mattp/projects/ag
 - implementation phrasing
 - file-location phrasing
 - troubleshooting-style phrasing
+- intentionally ambiguous agent-style phrasing where more than one doc can plausibly surface
 - multiple phrasings for the same underlying Moodle development concept
 
 Each case still uses explicit grading targets:
@@ -474,6 +475,7 @@ Each case still uses explicit grading targets:
 - `acceptable_document_paths` and `acceptable_heading_substrings` for weak passes
 - `disallowed_document_paths` for obviously wrong-but-lexically-close results
 - `bucket` to group related areas such as testing, privacy, output/rendering, or upgrade/schema work
+- `query_style` to distinguish conceptual, implementation, file-location, troubleshooting, and ambiguous wording
 - `concept_id` to group multiple query phrasings for the same underlying task
 - `required_heading_substrings_for_bundle` and `max_reasonable_bundle_tokens` for explicit bundle usefulness checks
 
@@ -504,6 +506,7 @@ The report exposes:
 - weak-pass counts and rates
 - misses
 - bucket-level breakdowns
+- query-style breakdowns
 - concept-level breakdowns across related phrasings
 - bundle bucket breakdowns when bundle evaluation is enabled
 - matched rule type and matched result rank per query
@@ -520,6 +523,7 @@ One regression investigation found that validation artifacts could look red even
 It is normal and acceptable for a broader benchmark to reduce headline scores. A perfect score on a small hand-tuned set is not enough; the more useful signal is whether retrieval remains strong across realistic wording variation and whether weak spots cluster in a meaningful bucket or concept group.
 
 Bucket results help answer where retrieval is weakest.
+Query-style results help answer whether the system is more brittle on implementation, troubleshooting, or file-location wording than on cleaner conceptual phrasing.
 Concept results help answer whether retrieval is brittle to alternate phrasings of the same task.
 Bundle results help answer whether the retrieved context is actually actionable for an agent, especially on file-location and implementation-guide queries.
 

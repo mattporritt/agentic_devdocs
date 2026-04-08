@@ -50,6 +50,7 @@ def _report(
             "top_3": _window(strong, weak, misses, len(outcomes)),
             "top_5": _window(strong, weak, misses, len(outcomes)),
             "buckets": report.buckets if buckets is None else buckets,
+            "query_styles": report.query_styles,
             "concepts": report.concepts,
             "bundle_overall": report.bundle_overall if bundle_overall is None else bundle_overall,
             "bundle_buckets": report.bundle_buckets if bundle_buckets is None else bundle_buckets,
@@ -65,6 +66,7 @@ def test_load_eval_cases_from_yaml(tmp_path: Path) -> None:
                 "cases:",
                 "  - id: settings",
                 "    bucket: plugin-structure",
+                "    query_style: implementation",
                 "    concept_id: admin-settings",
                 "    query: How do I add admin settings?",
                 "    preferred_document_paths:",
@@ -86,6 +88,7 @@ def test_load_eval_cases_from_yaml(tmp_path: Path) -> None:
     assert len(cases) == 1
     assert cases[0].id == "settings"
     assert cases[0].bucket == "plugin-structure"
+    assert cases[0].query_style == "implementation"
     assert cases[0].concept_id == "admin-settings"
     assert cases[0].preferred_heading_substrings == ["Admin settings"]
     assert cases[0].acceptable_document_paths == ["docs/apis.md"]
@@ -113,6 +116,7 @@ def test_run_eval_scores_hits(tmp_path: Path) -> None:
                 "cases:",
                 "  - id: admin-settings",
                 "    bucket: plugin-structure",
+                "    query_style: implementation",
                 "    concept_id: admin-settings",
                 "    query: How do I add admin settings for a plugin?",
                 "    preferred_document_paths:",
@@ -131,6 +135,7 @@ def test_run_eval_scores_hits(tmp_path: Path) -> None:
     assert report.outcomes[0].grade == "STRONG PASS"
     assert report.outcomes[0].matched_result is not None
     assert report.buckets["plugin-structure"].strong_passes == 1
+    assert report.query_styles["implementation"].strong_passes == 1
     assert report.concepts["admin-settings"].strong_passes == 1
 
 
@@ -591,6 +596,47 @@ def test_bundle_reporting_stays_consistent_across_renderers(tmp_path: Path) -> N
     assert summary_fields["Bundle insufficient"] == str(json_payload["bundle_overall"]["insufficient"])
 
 
+def test_query_style_reporting_is_rendered_when_present(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "admin.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "Use settings.php to add plugin admin settings.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=120, overlap_tokens=10)
+
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: admin-settings",
+                "    bucket: plugin-structure",
+                "    query_style: troubleshooting",
+                "    concept_id: admin-settings",
+                "    query: My plugin settings are not showing up - what file should I check?",
+                "    preferred_document_paths:",
+                "      - admin.md",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_eval(db_path=db_path, eval_file=eval_file)
+    text_output = render_eval_text(report)
+    summary_output = render_eval_summary_markdown(report)
+
+    assert report.query_styles["troubleshooting"].strong_passes == 1
+    assert "query_style_summary:" in text_output
+    assert "troubleshooting: strong=1 weak=0 miss=0" in text_output
+    assert "## Query Styles" in summary_output
+    assert "Style `troubleshooting`" in summary_output
+
+
 def test_assert_report_consistent_fails_on_divergent_aggregates(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
@@ -651,18 +697,21 @@ def test_bucket_and_concept_aggregates_remain_consistent(tmp_path: Path) -> None
                 "cases:",
                 "  - id: admin-settings-a",
                 "    bucket: plugin-structure",
+                "    query_style: implementation",
                 "    concept_id: admin-settings",
                 "    query: How do I add admin settings for a plugin?",
                 "    preferred_document_paths:",
                 "      - admin.md",
                 "  - id: admin-settings-b",
                 "    bucket: plugin-structure",
+                "    query_style: file_location",
                 "    concept_id: admin-settings",
                 "    query: Where do Moodle plugin admin settings go?",
                 "    preferred_document_paths:",
                 "      - admin.md",
                 "  - id: events-a",
                 "    bucket: events-hooks-integration",
+                "    query_style: conceptual",
                 "    concept_id: events",
                 "    query: How do events work in plugins?",
                 "    preferred_document_paths:",
@@ -677,6 +726,9 @@ def test_bucket_and_concept_aggregates_remain_consistent(tmp_path: Path) -> None
     assert report.total_queries == 3
     assert report.buckets["plugin-structure"].total_queries == 2
     assert report.buckets["events-hooks-integration"].total_queries == 1
+    assert report.query_styles["implementation"].total_queries == 1
+    assert report.query_styles["file_location"].total_queries == 1
+    assert report.query_styles["conceptual"].total_queries == 1
     assert report.concepts["admin-settings"].total_queries == 2
     assert report.concepts["events"].total_queries == 1
     assert (
@@ -687,11 +739,19 @@ def test_bucket_and_concept_aggregates_remain_consistent(tmp_path: Path) -> None
     )
 
 
-def _outcome(case_id: str, query: str, grade: str, bucket: str = "bucket-a", bundle_grade: str | None = None) -> EvalOutcome:
+def _outcome(
+    case_id: str,
+    query: str,
+    grade: str,
+    bucket: str = "bucket-a",
+    bundle_grade: str | None = None,
+    query_style: str | None = "implementation",
+) -> EvalOutcome:
     return EvalOutcome(
         case_id=case_id,
         query=query,
         bucket=bucket,
+        query_style=query_style,
         concept_id=None,
         top_k=5,
         grade=grade,

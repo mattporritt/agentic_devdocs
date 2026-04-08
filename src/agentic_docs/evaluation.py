@@ -328,6 +328,7 @@ def _score_case(
         case_id=case.id,
         query=case.query,
         bucket=case.bucket,
+        query_style=case.query_style,
         concept_id=case.concept_id,
         top_k=case.top_k,
         grade=grade,
@@ -398,6 +399,7 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
             top_3=empty_window,
             top_5=empty_window,
             buckets={},
+            query_styles={},
             concepts={},
             bundle_overall=None,
             bundle_buckets={},
@@ -408,6 +410,11 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
     weak_passes = sum(1 for outcome in outcomes if outcome.grade == "WEAK PASS")
     misses = total - strong_passes - weak_passes
     buckets = _group_reports(outcomes, key_fn=lambda outcome: outcome.bucket)
+    query_styles = _group_reports(
+        outcomes,
+        key_fn=lambda outcome: outcome.query_style,
+        include_empty=False,
+    )
     concepts = _group_reports(
         outcomes,
         key_fn=lambda outcome: outcome.concept_id,
@@ -424,6 +431,7 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
         top_3=_window_stats(outcomes, 3),
         top_5=_window_stats(outcomes, 5),
         buckets=buckets,
+        query_styles=query_styles,
         concepts=concepts,
         bundle_overall=bundle_overall,
         bundle_buckets=bundle_buckets,
@@ -774,6 +782,14 @@ def render_eval_text(report: EvalReport, show_weak_details: bool = False) -> str
                 f"miss={bucket_report.misses} top_1_strong={bucket_report.top_1.strong_pass_rate:.3f}"
             )
         lines.append("")
+    if report.query_styles:
+        lines.append("query_style_summary:")
+        for style, style_report in report.query_styles.items():
+            lines.append(
+                f"  {style}: strong={style_report.strong_passes} weak={style_report.weak_passes} "
+                f"miss={style_report.misses} top_1_strong={style_report.top_1.strong_pass_rate:.3f}"
+            )
+        lines.append("")
     if report.bundle_buckets:
         lines.append("bundle_bucket_summary:")
         for bucket, bucket_report in report.bundle_buckets.items():
@@ -792,7 +808,9 @@ def render_eval_text(report: EvalReport, show_weak_details: bool = False) -> str
         lines.append("")
     for outcome in report.outcomes:
         lines.append(f"{outcome.grade} {outcome.case_id}: {outcome.query}")
-        lines.append(f"  bucket={outcome.bucket} concept={outcome.concept_id or outcome.case_id}")
+        lines.append(
+            f"  bucket={outcome.bucket} style={outcome.query_style or 'unspecified'} concept={outcome.concept_id or outcome.case_id}"
+        )
         if outcome.matched_result is not None:
             lines.append(
                 f"  best_match_rank={outcome.matched_result.rank} path={outcome.matched_result.source_file_path} "
@@ -866,6 +884,13 @@ def render_eval_summary_markdown(report: EvalReport) -> str:
                 f"- Bucket `{bucket}`: `{bucket_report.strong_passes}` strong / `{bucket_report.weak_passes}` weak / "
                 f"`{bucket_report.misses}` miss, top-1 strong `{bucket_report.top_1.strong_pass_rate:.3f}`"
             )
+        if report.query_styles:
+            lines.extend(["", "## Query Styles", ""])
+            for style, style_report in report.query_styles.items():
+                lines.append(
+                    f"- Style `{style}`: `{style_report.strong_passes}` strong / `{style_report.weak_passes}` weak / "
+                    f"`{style_report.misses}` miss across `{style_report.total_queries}` queries"
+                )
         if report.concepts:
             lines.extend(["", "## Concepts", ""])
             for concept, concept_report in report.concepts.items():
