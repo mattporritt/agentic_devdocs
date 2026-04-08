@@ -919,3 +919,86 @@ def test_bundle_uses_design_system_css_tokens_primary_result(tmp_path: Path) -> 
 
     assert bundles[0].source_file_path == "design_system/start-here/for-developers-98e3cb.md"
     assert bundles[0].chunks[0].heading_path[-1] == "CSS Tokens (Recommended)"
+
+
+def test_context_bundle_adds_design_system_token_support_for_thin_ui_guidance_query(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "design_system" / "styles").mkdir(parents=True)
+    (docs_dir / "design_system" / "styles" / "colours-32c91c.md").write_text(
+        "# Colours\n\n"
+        "## Tokens\n\n"
+        "### Primitive colour tokens\n\n"
+        "Base colour tokens.\n\n"
+        "## Overview\n\n"
+        "### Core principles\n\n"
+        "Use semantic tokens in components and choose tokens by intent first.\n\n"
+        "## Usage\n\n"
+        "### Token pairing\n\n"
+        "Use token sets to stay consistent in UI states.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(
+        db_path=db_path,
+        query_text="What's the Moodle-recommended token approach for UI colours?",
+        top_k=5,
+    )
+    bundles = build_context_bundles(
+        db_path=db_path,
+        results=results[:1],
+        support_results=results,
+        query_text="What's the Moodle-recommended token approach for UI colours?",
+        bundle_max_tokens=320,
+    )
+
+    assert bundles[0].source_file_path == "design_system/styles/colours-32c91c.md"
+    assert bundles[0].selection_strategy in {"task_support", "task_support_truncated"}
+    assert bundles[0].diagnostics["support_reason"] == "design_system_thin_guidance"
+    assert any(chunk.role == "support" for chunk in bundles[0].chunks)
+    assert all(chunk.source_file_path == "design_system/styles/colours-32c91c.md" for chunk in bundles[0].chunks)
+    assert any(
+        "semantic tokens" in chunk.content.lower()
+        or "token pairing" in " > ".join(chunk.heading_path).lower()
+        for chunk in bundles[0].chunks
+    )
+
+
+def test_context_bundle_adds_renderers_support_for_general_render_query(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "output").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "output" / "index.md").write_text(
+        "---\n"
+        "title: Output API\n"
+        "---\n\n"
+        "## Output API\n\n"
+        "The Output API explains how Moodle renderers, renderables, themes and templates all work together.\n\n"
+        "## Page Output Journey\n\n"
+        "### Renderable\n\n"
+        + ("Renderables export template data and can be rendered through templates. " * 20)
+        + "\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=120, overlap_tokens=10)
+
+    results = query_chunks(
+        db_path=db_path,
+        query_text="How should this render in Moodle?",
+        top_k=5,
+    )
+    bundles = build_context_bundles(
+        db_path=db_path,
+        results=results[:1],
+        support_results=results,
+        query_text="How should this render in Moodle?",
+        bundle_max_tokens=420,
+    )
+
+    assert bundles[0].source_file_path == "apis/subsystems/output/index.md"
+    assert bundles[0].selection_strategy in {"task_support", "task_support_truncated"}
+    assert bundles[0].diagnostics["support_reason"] == "output_render_context"
+    assert any(chunk.role == "support" for chunk in bundles[0].chunks)
+    assert all(chunk.source_name == "devdocs_repo" for chunk in bundles[0].chunks)
+    assert any("renderers" in chunk.content.lower() for chunk in bundles[0].chunks)

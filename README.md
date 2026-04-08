@@ -694,6 +694,13 @@ In multi-source eval runs, bundle usefulness also stays source-aware:
 - mixed-source bundles are downgraded unless the fixture allows them
 - bundle diagnostics report the winning source, all included bundle source names, and whether the bundle remained source-coherent
 
+One narrow combined-source tuning pass targeted two remaining UI-guidance bundle gaps:
+
+- `combined-ui-token-approach` was source-correct but too thin, so the bundle builder now adds one compact same-source design-system support chunk when a tiny token-oriented section needs more actionable guidance
+- `combined-render-in-moodle` already retrieved the correct devdocs result, but it was missing explicit renderer context, so the bundle builder now adds one compact same-source output/template support chunk for general render questions
+
+Those fixes stay source-aware and did not require mixed-source support.
+
 This matters most for concrete task queries such as:
 
 - where do plugin admin settings go

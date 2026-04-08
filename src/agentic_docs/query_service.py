@@ -898,7 +898,8 @@ def build_context_bundles(
                 if not added:
                     break
         support_diagnostic: dict[str, str | int | list[str] | bool] = {}
-        if _should_add_support_chunk(profile, result, bundle_max_tokens, total_tokens):
+        support_reason = _support_chunk_reason(profile, result, bundle_max_tokens, total_tokens)
+        if support_reason is not None:
             extra_support_chunks: list[QueryResult] = []
             support_doc_ids: set[str] = set()
             for candidate in support_pool[: min(len(support_pool), 5)]:
@@ -938,6 +939,7 @@ def build_context_bundles(
                     selection_strategy = "task_support"
                     support_diagnostic = {
                         "task_intent": profile.task_intent,
+                        "support_reason": support_reason,
                         "support_added": True,
                         "support_chunk_id": support_candidate.chunk_id,
                         "support_source_file_path": support_candidate.source_file_path,
@@ -985,6 +987,7 @@ def build_context_bundles(
                             selection_strategy = "task_support_truncated"
                             support_diagnostic = {
                                 "task_intent": profile.task_intent,
+                                "support_reason": support_reason,
                                 "support_added": True,
                                 "support_chunk_id": support_candidate.chunk_id,
                                 "support_source_file_path": support_candidate.source_file_path,
@@ -995,18 +998,21 @@ def build_context_bundles(
                         else:
                             support_diagnostic = {
                                 "task_intent": profile.task_intent,
+                                "support_reason": support_reason,
                                 "support_added": False,
                                 "support_rejected": "budget",
                             }
                     else:
                         support_diagnostic = {
                             "task_intent": profile.task_intent,
+                            "support_reason": support_reason,
                             "support_added": False,
                             "support_rejected": "budget",
                         }
             else:
                 support_diagnostic = {
                     "task_intent": profile.task_intent,
+                    "support_reason": support_reason,
                     "support_added": False,
                     "support_rejected": "no_candidate",
                 }
@@ -1075,6 +1081,36 @@ def _extract_file_anchors(text: str) -> list[str]:
         if match not in anchors:
             anchors.append(match)
     return anchors
+
+
+def _support_chunk_reason(
+    profile: QueryProfile | None,
+    primary: QueryResult,
+    bundle_max_tokens: int,
+    total_tokens: int,
+) -> str | None:
+    if profile is None or bundle_max_tokens <= total_tokens:
+        return None
+    if profile.task_intent != "general":
+        return profile.task_intent
+
+    path_text = primary.source_file_path.lower()
+    heading_text = " > ".join(primary.heading_path).lower()
+    section_text = (primary.section_title or "").lower()
+    content_text = primary.content.lower()
+    combined_text = " ".join(part for part in (heading_text, section_text, content_text) if part)
+
+    if path_text.startswith("design_system/") and primary.token_count < 60:
+        if any(term in combined_text for term in ("token", "tokens", "colour", "color", "semantic")):
+            return "design_system_thin_guidance"
+
+    if any(token in profile.expanded_tokens for token in ("render", "rendered", "rendering")):
+        if any(term in path_text for term in ("/output/", "/templates/")) or any(
+            term in combined_text for term in ("renderable", "renderers", "template", "output")
+        ):
+            return "output_render_context"
+
+    return None
 
 
 def _expected_anchor_terms(profile: QueryProfile) -> list[str]:
@@ -1198,6 +1234,27 @@ def _candidate_support_score(candidate: QueryResult, primary: QueryResult, profi
             if "scss tokens" in heading_text or "scss tokens" in section_text:
                 score -= 6.0
 
+    primary_path = primary.source_file_path.lower()
+    primary_heading = " > ".join(primary.heading_path).lower()
+    primary_section = (primary.section_title or "").lower()
+    primary_text = " ".join(part for part in (primary_path, primary_heading, primary_section, primary.content.lower()) if part)
+
+    if primary_path.startswith("design_system/") and any(
+        term in primary_text for term in ("token", "tokens", "colour", "color", "semantic")
+    ):
+        if any(
+            term in heading_text or term in section_text
+            for term in ("overview", "core principles", "usage", "token pairing", "semantic colour tokens")
+        ):
+            score += 10.0
+
+    if any(term in primary_text for term in ("render", "renderable", "template", "output api", "page output journey")):
+        if any(
+            term in heading_text or term in section_text or term in content_text
+            for term in ("renderers", "output api", "renderable", "page output journey", "templates all work together")
+        ):
+            score += 12.0
+
     if candidate.source_file_path == primary.source_file_path and candidate.section_id != primary.section_id:
         score += 4.0
     if "example" in heading_text or "examples" in heading_text:
@@ -1254,12 +1311,4 @@ def _select_task_support_chunk(
 
 
 def _should_add_support_chunk(profile: QueryProfile | None, primary: QueryResult, bundle_max_tokens: int, total_tokens: int) -> bool:
-    if profile is None or bundle_max_tokens <= total_tokens:
-        return False
-    if profile.task_intent != "general":
-        return True
-    return (
-        "design_system" in profile.concept_families
-        and primary.source_file_path.lower().startswith("design_system/")
-        and primary.token_count < 40
-    )
+    return _support_chunk_reason(profile, primary, bundle_max_tokens, total_tokens) is not None
