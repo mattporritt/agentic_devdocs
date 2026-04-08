@@ -5,7 +5,7 @@ import pytest
 from typer.testing import CliRunner
 
 from agentic_docs.cli import _validation_summary_status, _validation_worktree_payload, app
-from agentic_docs.models import BundleGradeStats, EvalReport, EvalWindowStats
+from agentic_docs.models import BundleGradeStats, EvalReport, EvalWindowStats, RuntimeContractEnvelope
 
 
 runner = CliRunner()
@@ -183,6 +183,121 @@ def test_cli_query_explain_ranking_and_eval_weak_details(tmp_path: Path) -> None
     )
     assert eval_result.exit_code == 0
     assert "ranking=" in eval_result.stdout or "preferred_result_rank=" in eval_result.stdout
+
+
+def test_cli_query_json_contract_for_devdocs_query(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "admin").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "admin" / "index.md").write_text(
+        "---\n"
+        "title: Admin settings\n"
+        "---\n\n"
+        "## Individual settings\n\n"
+        "Plugin admin settings live in `settings.php` and are registered through the admin tree.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_result = runner.invoke(app, ["ingest", "--source", str(docs_dir), "--db-path", str(db_path), "--json"])
+    assert ingest_result.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "query",
+            "Where do Moodle plugin admin settings go?",
+            "--db-path",
+            str(db_path),
+            "--json-contract",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = RuntimeContractEnvelope.model_validate_json(result.stdout)
+    assert payload.tool == "agentic_docs"
+    assert payload.version == "v1"
+    assert payload.intent.task_intent == "file_location"
+    assert payload.results[0].source.name == "devdocs_repo"
+    assert payload.results[0].source.path == "apis/subsystems/admin/index.md"
+    assert "settings.php" in payload.results[0].content.file_anchors
+    assert payload.results[0].diagnostics.token_count > 0
+
+
+def test_cli_query_json_contract_for_design_system_query(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "design_system" / "styles").mkdir(parents=True)
+    (docs_dir / "design_system" / "styles" / "colours-32c91c.md").write_text(
+        "# Colours\n\n"
+        "## Tokens\n\n"
+        "### Semantic colour tokens\n\n"
+        "Semantic colour tokens give colours a role in the interface.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_result = runner.invoke(app, ["ingest", "--source", str(docs_dir), "--db-path", str(db_path), "--json"])
+    assert ingest_result.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "query",
+            "What are semantic colour tokens?",
+            "--db-path",
+            str(db_path),
+            "--json-contract",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = RuntimeContractEnvelope.model_validate_json(result.stdout)
+    assert payload.intent.query_intent == "conceptual"
+    assert payload.results[0].source.name == "design_system"
+    assert payload.results[0].source.path == "design_system/styles/colours-32c91c.md"
+    assert payload.results[0].content.sections[0].heading_path[-1] == "Semantic colour tokens"
+
+
+def test_cli_query_json_contract_is_stable_for_combined_query(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "output").mkdir(parents=True)
+    (docs_dir / "design_system" / "styles").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "output" / "index.md").write_text(
+        "---\n"
+        "title: Output API\n"
+        "---\n\n"
+        "## Output API\n\n"
+        "The Output API explains how Moodle renderers, renderables, themes and templates all work together.\n\n"
+        "## Page Output Journey\n\n"
+        "### Renderable\n\n"
+        "Renderables can be rendered through templates in Moodle output.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "design_system" / "styles" / "colours-32c91c.md").write_text(
+        "# Colours\n\n"
+        "## Overview\n\n"
+        "### Core principles\n\n"
+        "Use semantic tokens in components.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_result = runner.invoke(app, ["ingest", "--source", str(docs_dir), "--db-path", str(db_path), "--json"])
+    assert ingest_result.exit_code == 0
+
+    args = [
+        "query",
+        "How should this render in Moodle?",
+        "--db-path",
+        str(db_path),
+        "--json-contract",
+    ]
+    first = runner.invoke(app, args)
+    second = runner.invoke(app, args)
+
+    assert first.exit_code == 0
+    assert second.exit_code == 0
+    first_payload = RuntimeContractEnvelope.model_validate_json(first.stdout)
+    second_payload = RuntimeContractEnvelope.model_validate_json(second.stdout)
+    assert first_payload.model_dump() == second_payload.model_dump()
+    assert first_payload.results[0].source.name == "devdocs_repo"
+    assert first_payload.results[0].diagnostics.selection_strategy in {"match_only", "task_support", "task_support_truncated"}
 
 
 def test_cli_eval_text_and_json_are_consistent(tmp_path: Path) -> None:

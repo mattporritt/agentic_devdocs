@@ -206,6 +206,27 @@ agentic-docs query \
   --json
 ```
 
+Stable runtime contract output:
+
+```bash
+agentic-docs query \
+  "How should this render in Moodle?" \
+  --db-path ./_data/multi-source.db \
+  --top-k 3 \
+  --json-contract
+```
+
+`--json-contract` is the runtime-facing CLI mode for orchestration systems. It returns only a stable JSON envelope with:
+
+- `tool` and `version` for contract identification
+- `query` and `normalized_query`
+- explicit `intent` fields
+- compact `knowledge_bundle` results with provenance
+- normalized `sections`, `file_anchors`, and `key_points`
+- minimal diagnostics such as `ranking_explanation`, `support_reason`, `token_count`, and `selection_strategy`
+
+The contract is intentionally small and versioned as `v1`. It is designed for repeated machine use, not for human CLI inspection, and it reuses the same retrieval and bundle path as `--context-bundle`.
+
 Run the starter retrieval evaluation set:
 
 ```bash

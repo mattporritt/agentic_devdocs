@@ -134,6 +134,78 @@ class ContextBundle(BaseModel):
     diagnostics: dict[str, Any] | None = None
 
 
+class RuntimeContractIntent(BaseModel):
+    """Stable runtime-facing query intent summary."""
+
+    query_intent: str
+    task_intent: str
+    concept_families: list[str] = Field(default_factory=list)
+
+
+class RuntimeContractSource(BaseModel):
+    """Runtime-facing provenance for a returned knowledge bundle."""
+
+    name: str | None = None
+    type: str | None = None
+    url: str | None = None
+    canonical_url: str | None = None
+    path: str
+    document_title: str
+    section_title: str | None = None
+    heading_path: list[str] = Field(default_factory=list)
+
+
+class RuntimeContractSection(BaseModel):
+    """A compact structured section included in a runtime knowledge bundle."""
+
+    role: str
+    path: str
+    section_title: str | None = None
+    heading_path: list[str] = Field(default_factory=list)
+    token_count: int
+    content: str
+
+
+class RuntimeContractContent(BaseModel):
+    """Normalized content block for the stable runtime contract."""
+
+    summary: str
+    sections: list[RuntimeContractSection] = Field(default_factory=list)
+    file_anchors: list[str] = Field(default_factory=list)
+    key_points: list[str] = Field(default_factory=list)
+
+
+class RuntimeContractDiagnostics(BaseModel):
+    """Minimal runtime diagnostics for debugging orchestration issues."""
+
+    ranking_explanation: str | None = None
+    support_reason: str | None = None
+    token_count: int
+    selection_strategy: str
+
+
+class RuntimeContractResult(BaseModel):
+    """A single runtime-facing knowledge bundle result."""
+
+    type: str = "knowledge_bundle"
+    rank: int
+    confidence: str
+    source: RuntimeContractSource
+    content: RuntimeContractContent
+    diagnostics: RuntimeContractDiagnostics
+
+
+class RuntimeContractEnvelope(BaseModel):
+    """Stable JSON contract for external runtime consumers."""
+
+    tool: str = "agentic_docs"
+    version: str = "v1"
+    query: str
+    normalized_query: str
+    intent: RuntimeContractIntent
+    results: list[RuntimeContractResult] = Field(default_factory=list)
+
+
 class EvalCase(BaseModel):
     """A single retrieval evaluation case."""
 
