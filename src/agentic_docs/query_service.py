@@ -166,6 +166,8 @@ def _concept_families(tokens: list[str]) -> list[str]:
     families: list[str] = []
     if "upgrade" in expanded or "upgrade.php" in expanded:
         families.append("upgrade")
+    if {"web", "service", "services", "external"} & expanded and {"service", "services", "external"} & expanded:
+        families.append("web_services")
     if {"strings", "string"} & expanded and {
         "language",
         "lang",
@@ -325,6 +327,25 @@ def _family_specific_bonus(result: QueryResult, profile: QueryProfile) -> float:
             bonus += 4.0
         if _path_contains(path, "plugintypes"):
             bonus -= 12.0
+
+    if "web_services" in profile.concept_families:
+        if any(_path_contains(path, fragment) for fragment in ("subsystems/external/writing-a-service", "_files/db-services")):
+            bonus += 20.0
+        elif _path_contains(path, "subsystems/external/functions"):
+            bonus += 10.0
+        elif _path_contains(path, "subsystems/external/index"):
+            bonus += 8.0
+        if any(text in heading or text in title for text in ("writing a new service", "declare the web service function", "external functions")):
+            bonus += 8.0
+        if "db/services.php" in heading:
+            bonus += 8.0
+        if profile.task_intent == "implementation_guide":
+            if any(text in heading or text in title for text in ("writing", "declare", "external functions", "function descriptions")):
+                bonus += 10.0
+            if path == "docs/apis.md":
+                bonus -= 8.0
+            if _path_contains(path, "subsystems/external/index"):
+                bonus -= 4.0
 
     if "language_strings" in profile.concept_families:
         if path.endswith("docs/apis/_files/lang.md") or _path_contains(path, "_files/lang.md"):
@@ -1018,7 +1039,7 @@ def _select_task_support_chunk(
 
     primary_text = primary.content.lower()
     expected = _expected_anchor_terms(profile)
-    if expected and any(anchor.lower() in primary_text for anchor in expected):
+    if expected and any(anchor.lower() in primary_text for anchor in expected) and profile.task_intent != "implementation_guide":
         return None
 
     ranked = sorted(

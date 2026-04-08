@@ -495,7 +495,7 @@ def test_run_eval_with_bundles_completes_web_service_bundle_using_support_chunk(
 
     report = run_eval(db_path=db_path, eval_file=eval_file, with_bundles=True, bundle_max_tokens=220)
 
-    assert report.outcomes[0].grade == "WEAK PASS"
+    assert report.outcomes[0].grade == "STRONG PASS"
     assert report.outcomes[0].bundle_grade == "COMPLETE"
     assert "db/services.php" in report.outcomes[0].bundle_required_headings_present
 

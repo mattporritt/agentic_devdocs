@@ -51,6 +51,7 @@ def test_build_query_profile_detects_task_oriented_intents() -> None:
 
     assert location_profile.task_intent == "file_location"
     assert implementation_profile.task_intent == "implementation_guide"
+    assert "web_services" in implementation_profile.concept_families
 
 
 def test_query_chunks_and_context_bundle(tmp_path: Path) -> None:
@@ -145,6 +146,37 @@ def test_query_reranks_heading_match_above_generic_content_match(tmp_path: Path)
     assert results[0].source_file_path == "services.md"
     assert results[0].rerank_breakdown is not None
     assert int(results[0].rerank_breakdown["heading_overlap"]) >= int(results[1].rerank_breakdown["heading_overlap"])
+
+
+def test_query_prefers_writing_a_service_over_external_services_overview_for_web_services_howto(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "external").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "external" / "index.md").write_text(
+        "---\n"
+        "title: External Services\n"
+        "---\n\n"
+        "Moodle has a full-featured web service framework for external systems.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "apis" / "subsystems" / "external" / "writing-a-service.md").write_text(
+        "---\n"
+        "title: Writing a new service\n"
+        "---\n\n"
+        "## Declare the web service function\n\n"
+        "Declare plugin external functions in `db/services.php`.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="How do I define web services for a plugin?", top_k=2)
+
+    assert results[0].source_file_path == "apis/subsystems/external/writing-a-service.md"
+    assert results[0].rerank_breakdown is not None
+    assert "web_services" in results[0].rerank_breakdown["concept_families"]
+    assert float(results[0].rerank_breakdown["family_specific_bonus"]) > float(
+        results[1].rerank_breakdown["family_specific_bonus"]
+    )
 
 
 def test_query_penalizes_example_sections_when_canonical_subsystem_doc_exists(tmp_path: Path) -> None:
@@ -511,8 +543,7 @@ def test_context_bundle_adds_file_anchor_support_from_other_result(tmp_path: Pat
     )
 
     assert len(bundles) == 1
-    assert any(chunk.role == "support" for chunk in bundles[0].chunks)
-    assert any(chunk.source_file_path == "writing-a-service.md" for chunk in bundles[0].chunks)
+    assert bundles[0].source_file_path == "writing-a-service.md"
     assert any("db/services.php" in chunk.content for chunk in bundles[0].chunks)
 
 
@@ -552,6 +583,35 @@ def test_context_bundle_prefers_anchor_rich_support_chunk_from_other_document(tm
     assert any(chunk.source_file_path == "writing-a-service.md" for chunk in bundles[0].chunks)
     assert any("db/services.php" in chunk.content for chunk in bundles[0].chunks)
     assert all("Admin settings API" not in chunk.content for chunk in bundles[0].chunks if chunk.role == "support")
+
+
+def test_context_bundle_adds_web_service_support_when_primary_already_has_db_services_anchor(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "writing-a-service.md").write_text(
+        "# Writing a new service\n\n"
+        "## Declare the web service function\n\n"
+        "Declare the function in `db/services.php`.\n\n"
+        "## Write the external function descriptions\n\n"
+        "External functions are described in dedicated classes.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=80, overlap_tokens=5)
+
+    results = query_chunks(db_path=db_path, query_text="How do I define web services for a plugin?", top_k=3)
+    bundles = build_context_bundles(
+        db_path=db_path,
+        results=results[:1],
+        support_results=results,
+        query_text="How do I define web services for a plugin?",
+        bundle_max_tokens=220,
+    )
+
+    assert len(bundles) == 1
+    assert bundles[0].selection_strategy in {"task_support", "task_support_truncated"}
+    assert any(chunk.role == "support" for chunk in bundles[0].chunks)
+    assert any("External functions" in chunk.content or "Write the external function descriptions" in " > ".join(chunk.heading_path) for chunk in bundles[0].chunks)
 
 
 def test_context_bundle_adds_behat_writing_support_for_location_query(tmp_path: Path) -> None:

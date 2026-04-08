@@ -78,7 +78,8 @@ Pipeline:
 6. Queries are normalized for safer FTS5 matching, then reranked with explicit field-aware scoring.
 7. Canonical docs are preferred over equivalent versioned docs when the match quality is otherwise similar.
 8. Concept-heavy queries can receive concept-family and section-focus boosts so explanatory sections beat incidental mentions more often.
-9. `query`, `stats`, inspect commands, and `eval` expose the corpus in a debuggable way, including ranking diagnostics for weak passes.
+9. Implementation-oriented concept families such as web services can also prefer concrete how-to sections over broader overview pages when the query is asking how to define or register something.
+10. `query`, `stats`, inspect commands, and `eval` expose the corpus in a debuggable way, including ranking diagnostics for weak passes.
 
 Core modules:
 
@@ -375,6 +376,8 @@ The eval command reports:
 - optional baseline comparison deltas, changed buckets, and changed cases when `--baseline` is supplied
 
 Use `--json` for machine-readable output suitable for automation or later comparison between runs.
+
+One recent example of this tuning loop was the final `web-services-howto` weak retrieval case. The bundle layer was already recovering with `db/services.php` support, but the primary retrieval winner was still a broad web-services overview. That was fixed by adding an explicit web-services concept family bonus for `writing-a-service` style implementation pages, while keeping the logic visible in ranking explanations.
 
 ## Schema
 
