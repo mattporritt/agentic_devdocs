@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from datetime import datetime
+from typing import Literal
 from typing import Any
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class DocumentMetadata(BaseModel):
@@ -137,6 +138,8 @@ class ContextBundle(BaseModel):
 class RuntimeContractIntent(BaseModel):
     """Stable runtime-facing query intent summary."""
 
+    model_config = ConfigDict(extra="forbid")
+
     query_intent: str
     task_intent: str
     concept_families: list[str] = Field(default_factory=list)
@@ -144,6 +147,8 @@ class RuntimeContractIntent(BaseModel):
 
 class RuntimeContractSource(BaseModel):
     """Runtime-facing provenance for a returned knowledge bundle."""
+
+    model_config = ConfigDict(extra="forbid")
 
     name: str | None = None
     type: str | None = None
@@ -158,8 +163,14 @@ class RuntimeContractSource(BaseModel):
 class RuntimeContractSection(BaseModel):
     """A compact structured section included in a runtime knowledge bundle."""
 
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
     role: str
-    path: str
+    document_title: str
+    source_path: str
+    source_url: str | None = None
+    canonical_url: str | None = None
     section_title: str | None = None
     heading_path: list[str] = Field(default_factory=list)
     token_count: int
@@ -168,6 +179,8 @@ class RuntimeContractSection(BaseModel):
 
 class RuntimeContractContent(BaseModel):
     """Normalized content block for the stable runtime contract."""
+
+    model_config = ConfigDict(extra="forbid")
 
     summary: str
     sections: list[RuntimeContractSection] = Field(default_factory=list)
@@ -178,6 +191,8 @@ class RuntimeContractContent(BaseModel):
 class RuntimeContractDiagnostics(BaseModel):
     """Minimal runtime diagnostics for debugging orchestration issues."""
 
+    model_config = ConfigDict(extra="forbid")
+
     ranking_explanation: str | None = None
     support_reason: str | None = None
     token_count: int
@@ -187,9 +202,12 @@ class RuntimeContractDiagnostics(BaseModel):
 class RuntimeContractResult(BaseModel):
     """A single runtime-facing knowledge bundle result."""
 
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
     type: str = "knowledge_bundle"
     rank: int
-    confidence: str
+    confidence: Literal["high", "medium", "low"]
     source: RuntimeContractSource
     content: RuntimeContractContent
     diagnostics: RuntimeContractDiagnostics
@@ -197,6 +215,8 @@ class RuntimeContractResult(BaseModel):
 
 class RuntimeContractEnvelope(BaseModel):
     """Stable JSON contract for external runtime consumers."""
+
+    model_config = ConfigDict(extra="forbid")
 
     tool: str = "agentic_docs"
     version: str = "v1"

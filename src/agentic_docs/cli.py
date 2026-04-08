@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from hashlib import sha1
 from pathlib import Path
 from typing import Annotated
 
@@ -128,6 +129,11 @@ def _runtime_confidence(bundle) -> str:
     return "low"
 
 
+def _stable_contract_id(*parts: str) -> str:
+    normalized = "||".join(part.strip() for part in parts)
+    return sha1(normalized.encode("utf-8")).hexdigest()[:16]
+
+
 def _runtime_ranking_explanation(bundle) -> str:
     source_name = _infer_bundle_source_name(bundle.source_file_path, bundle.source_name, bundle.source_type)
     heading = " > ".join(bundle.heading_path) if bundle.heading_path else (bundle.section_title or bundle.document_title)
@@ -144,8 +150,12 @@ def _build_runtime_contract(query_text: str, bundles: list, top_k: int) -> Runti
     for bundle in bundles[:top_k]:
         sections = [
             RuntimeContractSection(
+                id=chunk.chunk_id,
                 role=chunk.role,
-                path=chunk.source_file_path,
+                document_title=bundle.document_title,
+                source_path=chunk.source_file_path,
+                source_url=chunk.source_url,
+                canonical_url=chunk.canonical_url,
                 section_title=chunk.section_title,
                 heading_path=chunk.heading_path,
                 token_count=chunk.token_count,
@@ -157,6 +167,11 @@ def _build_runtime_contract(query_text: str, bundles: list, top_k: int) -> Runti
         source_name = _infer_bundle_source_name(bundle.source_file_path, bundle.source_name, bundle.source_type)
         results.append(
             RuntimeContractResult(
+                id=_stable_contract_id(
+                    bundle.source_file_path,
+                    bundle.section_title or "",
+                    " > ".join(bundle.heading_path),
+                ),
                 rank=bundle.rank,
                 confidence=_runtime_confidence(bundle),
                 source=RuntimeContractSource(

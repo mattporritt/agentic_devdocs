@@ -1,0 +1,367 @@
+{
+  "$defs": {
+    "RuntimeContractContent": {
+      "additionalProperties": false,
+      "description": "Normalized content block for the stable runtime contract.",
+      "properties": {
+        "file_anchors": {
+          "items": {
+            "type": "string"
+          },
+          "title": "File Anchors",
+          "type": "array"
+        },
+        "key_points": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Key Points",
+          "type": "array"
+        },
+        "sections": {
+          "items": {
+            "$ref": "#/$defs/RuntimeContractSection"
+          },
+          "title": "Sections",
+          "type": "array"
+        },
+        "summary": {
+          "title": "Summary",
+          "type": "string"
+        }
+      },
+      "required": [
+        "summary"
+      ],
+      "title": "RuntimeContractContent",
+      "type": "object"
+    },
+    "RuntimeContractDiagnostics": {
+      "additionalProperties": false,
+      "description": "Minimal runtime diagnostics for debugging orchestration issues.",
+      "properties": {
+        "ranking_explanation": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Ranking Explanation"
+        },
+        "selection_strategy": {
+          "title": "Selection Strategy",
+          "type": "string"
+        },
+        "support_reason": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Support Reason"
+        },
+        "token_count": {
+          "title": "Token Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "token_count",
+        "selection_strategy"
+      ],
+      "title": "RuntimeContractDiagnostics",
+      "type": "object"
+    },
+    "RuntimeContractIntent": {
+      "additionalProperties": false,
+      "description": "Stable runtime-facing query intent summary.",
+      "properties": {
+        "concept_families": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Concept Families",
+          "type": "array"
+        },
+        "query_intent": {
+          "title": "Query Intent",
+          "type": "string"
+        },
+        "task_intent": {
+          "title": "Task Intent",
+          "type": "string"
+        }
+      },
+      "required": [
+        "query_intent",
+        "task_intent"
+      ],
+      "title": "RuntimeContractIntent",
+      "type": "object"
+    },
+    "RuntimeContractResult": {
+      "additionalProperties": false,
+      "description": "A single runtime-facing knowledge bundle result.",
+      "properties": {
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "content": {
+          "$ref": "#/$defs/RuntimeContractContent"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/RuntimeContractDiagnostics"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "rank": {
+          "title": "Rank",
+          "type": "integer"
+        },
+        "source": {
+          "$ref": "#/$defs/RuntimeContractSource"
+        },
+        "type": {
+          "default": "knowledge_bundle",
+          "title": "Type",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "rank",
+        "confidence",
+        "source",
+        "content",
+        "diagnostics"
+      ],
+      "title": "RuntimeContractResult",
+      "type": "object"
+    },
+    "RuntimeContractSection": {
+      "additionalProperties": false,
+      "description": "A compact structured section included in a runtime knowledge bundle.",
+      "properties": {
+        "canonical_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Url"
+        },
+        "content": {
+          "title": "Content",
+          "type": "string"
+        },
+        "document_title": {
+          "title": "Document Title",
+          "type": "string"
+        },
+        "heading_path": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Heading Path",
+          "type": "array"
+        },
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "role": {
+          "title": "Role",
+          "type": "string"
+        },
+        "section_title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Section Title"
+        },
+        "source_path": {
+          "title": "Source Path",
+          "type": "string"
+        },
+        "source_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Url"
+        },
+        "token_count": {
+          "title": "Token Count",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "id",
+        "role",
+        "document_title",
+        "source_path",
+        "token_count",
+        "content"
+      ],
+      "title": "RuntimeContractSection",
+      "type": "object"
+    },
+    "RuntimeContractSource": {
+      "additionalProperties": false,
+      "description": "Runtime-facing provenance for a returned knowledge bundle.",
+      "properties": {
+        "canonical_url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Canonical Url"
+        },
+        "document_title": {
+          "title": "Document Title",
+          "type": "string"
+        },
+        "heading_path": {
+          "items": {
+            "type": "string"
+          },
+          "title": "Heading Path",
+          "type": "array"
+        },
+        "name": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Name"
+        },
+        "path": {
+          "title": "Path",
+          "type": "string"
+        },
+        "section_title": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Section Title"
+        },
+        "type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Type"
+        },
+        "url": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Url"
+        }
+      },
+      "required": [
+        "path",
+        "document_title"
+      ],
+      "title": "RuntimeContractSource",
+      "type": "object"
+    }
+  },
+  "additionalProperties": false,
+  "description": "Stable JSON contract for external runtime consumers.",
+  "properties": {
+    "intent": {
+      "$ref": "#/$defs/RuntimeContractIntent"
+    },
+    "normalized_query": {
+      "title": "Normalized Query",
+      "type": "string"
+    },
+    "query": {
+      "title": "Query",
+      "type": "string"
+    },
+    "results": {
+      "items": {
+        "$ref": "#/$defs/RuntimeContractResult"
+      },
+      "title": "Results",
+      "type": "array"
+    },
+    "tool": {
+      "default": "agentic_docs",
+      "title": "Tool",
+      "type": "string"
+    },
+    "version": {
+      "default": "v1",
+      "title": "Version",
+      "type": "string"
+    }
+  },
+  "required": [
+    "query",
+    "normalized_query",
+    "intent"
+  ],
+  "title": "RuntimeContractEnvelope",
+  "type": "object"
+}

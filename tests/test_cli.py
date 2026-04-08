@@ -212,12 +212,24 @@ def test_cli_query_json_contract_for_devdocs_query(tmp_path: Path) -> None:
     )
 
     assert result.exit_code == 0
+    raw = json.loads(result.stdout)
     payload = RuntimeContractEnvelope.model_validate_json(result.stdout)
     assert payload.tool == "agentic_docs"
     assert payload.version == "v1"
+    assert raw["results"][0]["id"] == payload.results[0].id
+    assert isinstance(raw["results"][0]["content"]["sections"], list)
+    assert isinstance(raw["results"][0]["content"]["file_anchors"], list)
+    assert isinstance(raw["results"][0]["content"]["key_points"], list)
+    assert raw["results"][0]["diagnostics"]["support_reason"] == "file_location"
     assert payload.intent.task_intent == "file_location"
+    assert payload.results[0].confidence == "high"
     assert payload.results[0].source.name == "devdocs_repo"
     assert payload.results[0].source.path == "apis/subsystems/admin/index.md"
+    assert payload.results[0].content.sections[0].id
+    assert payload.results[0].content.sections[0].document_title == "Admin settings"
+    assert payload.results[0].content.sections[0].source_path == "apis/subsystems/admin/index.md"
+    assert payload.results[0].content.sections[0].source_url is None
+    assert payload.results[0].content.sections[0].canonical_url is None
     assert "settings.php" in payload.results[0].content.file_anchors
     assert payload.results[0].diagnostics.token_count > 0
 
@@ -248,11 +260,17 @@ def test_cli_query_json_contract_for_design_system_query(tmp_path: Path) -> None
     )
 
     assert result.exit_code == 0
+    raw = json.loads(result.stdout)
     payload = RuntimeContractEnvelope.model_validate_json(result.stdout)
     assert payload.intent.query_intent == "conceptual"
     assert payload.results[0].source.name == "design_system"
     assert payload.results[0].source.path == "design_system/styles/colours-32c91c.md"
+    assert raw["results"][0]["source"]["url"] is None
+    assert raw["results"][0]["source"]["canonical_url"] is None
+    assert isinstance(raw["results"][0]["content"]["sections"], list)
     assert payload.results[0].content.sections[0].heading_path[-1] == "Semantic colour tokens"
+    assert payload.results[0].content.sections[0].document_title == "Colours"
+    assert payload.results[0].content.sections[0].source_path == "design_system/styles/colours-32c91c.md"
 
 
 def test_cli_query_json_contract_is_stable_for_combined_query(tmp_path: Path) -> None:
@@ -296,8 +314,43 @@ def test_cli_query_json_contract_is_stable_for_combined_query(tmp_path: Path) ->
     first_payload = RuntimeContractEnvelope.model_validate_json(first.stdout)
     second_payload = RuntimeContractEnvelope.model_validate_json(second.stdout)
     assert first_payload.model_dump() == second_payload.model_dump()
+    assert first_payload.results[0].id == second_payload.results[0].id
+    assert first_payload.results[0].content.sections[0].id == second_payload.results[0].content.sections[0].id
     assert first_payload.results[0].source.name == "devdocs_repo"
     assert first_payload.results[0].diagnostics.selection_strategy in {"match_only", "task_support", "task_support_truncated"}
+
+
+def test_cli_query_json_contract_empty_results_shape(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    docs_dir.mkdir()
+    (docs_dir / "simple.md").write_text("# Simple\n\n## Intro\n\nOnly one concept lives here.\n", encoding="utf-8")
+    db_path = tmp_path / "docs.db"
+    ingest_result = runner.invoke(app, ["ingest", "--source", str(docs_dir), "--db-path", str(db_path), "--json"])
+    assert ingest_result.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "query",
+            "nonexistent phrase zebra tungsten",
+            "--db-path",
+            str(db_path),
+            "--json-contract",
+        ],
+    )
+
+    assert result.exit_code == 0
+    raw = json.loads(result.stdout)
+    assert raw["tool"] == "agentic_docs"
+    assert raw["version"] == "v1"
+    assert raw["results"] == []
+    assert isinstance(raw["intent"]["concept_families"], list)
+
+
+def test_runtime_contract_schema_artifact_matches_model() -> None:
+    schema_path = Path("schemas/runtime_contract_v1.json")
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert schema == RuntimeContractEnvelope.model_json_schema()
 
 
 def test_cli_eval_text_and_json_are_consistent(tmp_path: Path) -> None:

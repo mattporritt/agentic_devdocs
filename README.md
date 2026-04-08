@@ -227,6 +227,76 @@ agentic-docs query \
 
 The contract is intentionally small and versioned as `v1`. It is designed for repeated machine use, not for human CLI inspection, and it reuses the same retrieval and bundle path as `--context-bundle`.
 
+Contract rules for `v1`:
+
+- Envelope fields `tool`, `version`, `query`, `normalized_query`, `intent`, and `results` are always present.
+- Result fields `id`, `type`, `rank`, `confidence`, `source`, `content`, and `diagnostics` are always present.
+- Lists are always present and may be empty: `results`, `intent.concept_families`, `source.heading_path`, `content.sections`, `content.file_anchors`, `content.key_points`, and `sections[].heading_path`.
+- Nullable strings stay present as `null` when absent: `source.url`, `source.canonical_url`, `source.section_title`, `diagnostics.support_reason`, `diagnostics.ranking_explanation`, `sections[].source_url`, `sections[].canonical_url`, and `sections[].section_title`.
+- `content.sections` is the main structured payload. Each entry always includes `id`, `role`, `document_title`, `source_path`, `heading_path`, `token_count`, and `content`.
+- `result.id` is a deterministic bundle identifier derived from source path and heading context. `content.sections[].id` reuses the stable chunk id from storage.
+- `confidence` is a coarse runtime label only: `high` for rank 1, `medium` for ranks 2-3, and `low` otherwise.
+- A machine-readable schema for this contract lives at [schemas/runtime_contract_v1.json](/Users/mattp/projects/agentic_devdocs/schemas/runtime_contract_v1.json).
+
+Example `v1` response shape:
+
+```json
+{
+  "tool": "agentic_docs",
+  "version": "v1",
+  "query": "How should this render in Moodle?",
+  "normalized_query": "should this render moodle",
+  "intent": {
+    "query_intent": "keyword",
+    "task_intent": "general",
+    "concept_families": []
+  },
+  "results": [
+    {
+      "id": "6e8ce0cbfcd4bc4a",
+      "type": "knowledge_bundle",
+      "rank": 1,
+      "confidence": "high",
+      "source": {
+        "name": "devdocs_repo",
+        "type": "repo_markdown",
+        "url": null,
+        "canonical_url": null,
+        "path": "docs/apis/subsystems/output/index.md",
+        "document_title": "Output API",
+        "section_title": "Renderable",
+        "heading_path": ["Page Output Journey", "Renderable"]
+      },
+      "content": {
+        "summary": "Output API — Page Output Journey > Renderable: Note that the export_for_template function should only return simple types...",
+        "sections": [
+          {
+            "id": "chunk-abc123",
+            "role": "match",
+            "document_title": "Output API",
+            "source_path": "docs/apis/subsystems/output/index.md",
+            "source_url": null,
+            "canonical_url": null,
+            "section_title": "Renderable",
+            "heading_path": ["Page Output Journey", "Renderable"],
+            "token_count": 276,
+            "content": "Heading: Page Output Journey > Renderable ..."
+          }
+        ],
+        "file_anchors": ["admin/tool/demo/classes/output/renderer.php"],
+        "key_points": ["If you wish to use a specific template to render the content ..."]
+      },
+      "diagnostics": {
+        "ranking_explanation": "Rank 1 devdocs_repo bundle from Page Output Journey > Renderable. Added support for output_render_context.",
+        "support_reason": "output_render_context",
+        "token_count": 599,
+        "selection_strategy": "task_support_truncated"
+      }
+    }
+  ]
+}
+```
+
 Run the starter retrieval evaluation set:
 
 ```bash
