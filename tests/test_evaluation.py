@@ -6,6 +6,8 @@ import re
 import pytest
 
 from agentic_docs.evaluation import (
+    _grade_bundle,
+    _grade_result,
     _build_report,
     assert_report_consistent,
     compare_eval_reports,
@@ -15,9 +17,13 @@ from agentic_docs.evaluation import (
     render_eval_text,
     run_eval,
 )
+from agentic_docs.chunking import chunk_document
 from agentic_docs.ingest import ingest_source
-from agentic_docs.models import BundleGradeStats, EvalOutcome, EvalReport, EvalWindowStats
+from agentic_docs.models import BundleGradeStats, ContextBundle, ContextBundleChunk, DocumentMetadata, DocumentModel, EvalCase, EvalOutcome, EvalReport, EvalWindowStats, QueryResult, SectionModel
+from agentic_docs.storage import SQLiteStore
 from agentic_docs.query_service import query_chunks
+from agentic_docs.tokenizers import get_tokenizer
+from agentic_docs.utils import stable_id
 
 
 def _window(strong: int, weak: int, misses: int, total: int) -> EvalWindowStats:
@@ -69,12 +75,18 @@ def test_load_eval_cases_from_yaml(tmp_path: Path) -> None:
                 "    query_style: implementation",
                 "    concept_id: admin-settings",
                 "    query: How do I add admin settings?",
+                "    preferred_source_names:",
+                "      - devdocs_repo",
+                "    acceptable_source_names:",
+                "      - design_system",
                 "    preferred_document_paths:",
                 "      - docs/apis/subsystems/admin/index.md",
                 "    acceptable_document_paths:",
                 "      - docs/apis.md",
                 "    preferred_heading_substrings:",
                 "      - Admin settings",
+                "    preferred_bundle_source_names:",
+                "      - devdocs_repo",
                 "    required_heading_substrings_for_bundle:",
                 "      - settings.php",
                 "    max_reasonable_bundle_tokens: 220",
@@ -90,8 +102,11 @@ def test_load_eval_cases_from_yaml(tmp_path: Path) -> None:
     assert cases[0].bucket == "plugin-structure"
     assert cases[0].query_style == "implementation"
     assert cases[0].concept_id == "admin-settings"
+    assert cases[0].preferred_source_names == ["devdocs_repo"]
+    assert cases[0].acceptable_source_names == ["design_system"]
     assert cases[0].preferred_heading_substrings == ["Admin settings"]
     assert cases[0].acceptable_document_paths == ["docs/apis.md"]
+    assert cases[0].preferred_bundle_source_names == ["devdocs_repo"]
     assert cases[0].required_heading_substrings_for_bundle == ["settings.php"]
     assert cases[0].max_reasonable_bundle_tokens == 220
 
@@ -102,6 +117,89 @@ def test_load_design_system_eval_fixture() -> None:
     assert len(cases) >= 4
     assert {case.bucket for case in cases} >= {"design-system-developers", "design-system-foundations"}
     assert {case.query_style for case in cases} >= {"implementation", "conceptual", "file_location"}
+
+
+def test_load_combined_multi_source_eval_fixture() -> None:
+    cases = load_eval_cases(Path("evals/multi_source_eval.yaml"))
+
+    assert len(cases) >= 8
+    assert {case.preferred_source_names[0] for case in cases if case.preferred_source_names} >= {
+        "devdocs_repo",
+        "design_system",
+    }
+    assert "ambiguous" in {case.query_style for case in cases if case.query_style}
+
+
+def test_grade_result_infers_legacy_devdocs_source_metadata() -> None:
+    case = EvalCase(
+        id="legacy-devdocs",
+        query="How do I add admin settings?",
+        preferred_source_names=["devdocs_repo"],
+        preferred_document_paths=["docs/apis/subsystems/admin/index.md"],
+    )
+    result = QueryResult(
+        chunk_id="chunk-1",
+        source_file_path="docs/apis/subsystems/admin/index.md",
+        document_id="doc-1",
+        document_title="Admin settings",
+        section_id="section-1",
+        section_title="Individual settings",
+        heading_path=["Individual settings"],
+        content="Use settings.php for admin settings.",
+        token_count=8,
+        score=-10.0,
+        chunk_order=0,
+        snippet="settings.php",
+        metadata_json={},
+    )
+
+    grade, matched_on, rule_type = _grade_result(case, result)
+
+    assert grade == "STRONG PASS"
+    assert any(match.startswith("preferred_source:devdocs_repo") for match in matched_on)
+    assert rule_type == "preferred_source+target"
+
+
+def _store_synthetic_document(
+    db_path: Path,
+    *,
+    source_path: str,
+    title: str,
+    heading_path: list[str],
+    content: str,
+    source_name: str,
+    source_type: str,
+) -> None:
+    document_id = stable_id("doc", source_path)
+    section_id = stable_id("section", source_path, *heading_path)
+    document = DocumentModel(
+        id=document_id,
+        title=title,
+        metadata=DocumentMetadata(
+            source_path=source_path,
+            source_type=source_type,
+            source_name=source_name,
+            source_url=f"https://example.test/{source_path}",
+            canonical_url=f"https://example.test/{source_path}",
+            file_hash=stable_id("file", source_path, content),
+        ),
+        sections=[
+            SectionModel(
+                id=section_id,
+                document_id=document_id,
+                section_order=0,
+                section_title=heading_path[-1] if heading_path else None,
+                heading_level=max(len(heading_path), 1),
+                heading_path=heading_path,
+                content=content,
+            )
+        ],
+    )
+    tokenizer = get_tokenizer("openai")
+    chunks = chunk_document(document=document, tokenizer=tokenizer, max_tokens=120, overlap_tokens=10)
+    store = SQLiteStore(db_path)
+    store.initialize()
+    store.store_document(document, chunks)
 
 
 def test_run_eval_scores_hits(tmp_path: Path) -> None:
@@ -226,6 +324,157 @@ def test_run_eval_distinguishes_weak_pass(tmp_path: Path) -> None:
 
     assert report.outcomes[0].grade == "WEAK PASS"
     assert report.top_1.weak_pass_rate == 1.0
+
+
+def test_run_eval_uses_source_expectations_for_weak_pass(tmp_path: Path) -> None:
+    db_path = tmp_path / "docs.db"
+    _store_synthetic_document(
+        db_path,
+        source_path="docs/apis/subsystems/output/index.md",
+        title="Output API",
+        heading_path=["Output API", "Renderers"],
+        content="This should render in Moodle via the Output API renderers and templates.",
+        source_name="devdocs_repo",
+        source_type="repo_markdown",
+    )
+    _store_synthetic_document(
+        db_path,
+        source_path="design_system/start-here/rendering.site",
+        title="Rendering guidance",
+        heading_path=["How should this render in Moodle?"],
+        content="How should this render in Moodle? How should this render in Moodle? Use UI rendering guidance for Moodle screens.",
+        source_name="design_system",
+        source_type="scraped_web",
+    )
+
+    eval_file = tmp_path / "eval.yaml"
+    eval_file.write_text(
+        "\n".join(
+            [
+                "cases:",
+                "  - id: cross-source-rendering",
+                "    bucket: combined-cross-source",
+                "    query_style: ambiguous",
+                "    concept_id: rendering",
+                "    query: How should this render in Moodle?",
+                "    preferred_source_names:",
+                "      - devdocs_repo",
+                "    acceptable_source_names:",
+                "      - design_system",
+                "    preferred_document_paths:",
+                "      - docs/apis/subsystems/output/index.md",
+                "    acceptable_document_paths:",
+                "      - design_system/start-here/rendering.site",
+            ]
+        ),
+        encoding="utf-8",
+    )
+
+    report = run_eval(db_path=db_path, eval_file=eval_file)
+
+    assert report.outcomes[0].grade == "WEAK PASS"
+    assert report.outcomes[0].matched_result_source_name == "design_system"
+    assert report.outcomes[0].preferred_source_rank == 2
+    assert "source-selection issue" in (report.outcomes[0].ranking_diagnostic or "")
+
+
+def test_run_eval_reports_source_confusion_cases() -> None:
+    outcome = EvalOutcome(
+        case_id="case-a",
+        query="How should this render in Moodle?",
+        bucket="combined-cross-source",
+        query_style="ambiguous",
+        concept_id="rendering",
+        expected_source_name="devdocs_repo",
+        acceptable_source_names=[],
+        top_k=5,
+        grade="MISS",
+        strong_pass_top_1=False,
+        strong_pass_top_3=False,
+        strong_pass_top_5=False,
+        weak_pass_top_1=False,
+        weak_pass_top_3=False,
+        weak_pass_top_5=False,
+        matched_result_rank=1,
+        matched_result_path="design_system/start-here/rendering.site",
+        matched_result_source_name="design_system",
+        matched_result_source_type="scraped_web",
+        bundle_grade="PARTIAL",
+        bundle_source_name="design_system",
+        bundle_source_type="scraped_web",
+        bundle_source_names=["design_system", "devdocs_repo"],
+        bundle_source_coherent=False,
+    )
+
+    report = _build_report([outcome])
+
+    assert report.expected_sources["devdocs_repo"].total_queries == 1
+    assert report.bundle_expected_sources["devdocs_repo"].total_evaluated == 1
+    assert report.source_confusions[0].matched_result_source_name == "design_system"
+
+
+def test_grade_bundle_detects_wrong_source_and_mixed_sources() -> None:
+    case = EvalCase(
+        id="design-query",
+        query="How do I use CSS tokens from the Moodle design system?",
+        bucket="design-system-developers",
+        preferred_source_names=["design_system"],
+        preferred_bundle_source_names=["design_system"],
+        preferred_document_paths=["design_system/start-here/for-developers.site"],
+        preferred_heading_substrings_for_bundle=["CSS Tokens"],
+        required_heading_substrings_for_bundle=["CSS Tokens"],
+    )
+    bundle = ContextBundle(
+        rank=1,
+        score=-1.0,
+        bundle_token_count=120,
+        source_file_path="design_system/start-here/for-developers.site",
+        source_name="design_system",
+        source_type="scraped_web",
+        document_title="For Developers",
+        section_title="CSS Tokens",
+        heading_path=["For Developers", "CSS Tokens"],
+        chunks=[
+            ContextBundleChunk(
+                chunk_id="a",
+                role="match",
+                content="CSS Tokens are the recommended design-system approach.",
+                token_count=20,
+                source_file_path="design_system/start-here/for-developers.site",
+                source_name="design_system",
+                source_type="scraped_web",
+                section_title="CSS Tokens",
+                heading_path=["For Developers", "CSS Tokens"],
+            ),
+            ContextBundleChunk(
+                chunk_id="b",
+                role="support",
+                content="Plugin templates render in the Output API.",
+                token_count=20,
+                source_file_path="docs/apis/subsystems/output/index.md",
+                source_name="devdocs_repo",
+                source_type="repo_markdown",
+                section_title="Renderers",
+                heading_path=["Output API", "Renderers"],
+            ),
+        ],
+        selection_strategy="task_support",
+    )
+
+    grade, details = _grade_bundle(
+        case=case,
+        bundle=bundle,
+        retrieval_grade="STRONG PASS",
+        bundle_max_tokens=220,
+        evaluate_bundle=True,
+    )
+
+    assert grade == "PARTIAL"
+    assert details["bundle_source_name"] == "design_system"
+    assert details["bundle_source_coherent"] is False
+    assert details["bundle_source_names"] == ["design_system", "devdocs_repo"]
+    assert "mixed sources" in details["bundle_diagnostic"]
+
 
 
 def test_run_eval_reports_preferred_result_rank_for_weak_pass(tmp_path: Path) -> None:
@@ -645,6 +894,48 @@ def test_query_style_reporting_is_rendered_when_present(tmp_path: Path) -> None:
     assert "Style `troubleshooting`" in summary_output
 
 
+def test_source_reporting_is_rendered_when_present() -> None:
+    outcome = EvalOutcome(
+        case_id="case-a",
+        query="How should this render in Moodle?",
+        bucket="combined-cross-source",
+        query_style="ambiguous",
+        concept_id="rendering",
+        expected_source_name="devdocs_repo",
+        acceptable_source_names=["design_system"],
+        top_k=5,
+        grade="WEAK PASS",
+        strong_pass_top_1=False,
+        strong_pass_top_3=False,
+        strong_pass_top_5=False,
+        weak_pass_top_1=True,
+        weak_pass_top_3=True,
+        weak_pass_top_5=True,
+        matched_result_rank=1,
+        matched_result_path="design_system/start-here/rendering.site",
+        matched_result_source_name="design_system",
+        matched_result_source_type="scraped_web",
+        preferred_source_rank=2,
+        ranking_diagnostic="Preferred source devdocs_repo was present at rank 2, but rank 1 came from design_system.",
+        bundle_grade="PARTIAL",
+        bundle_path="design_system/start-here/rendering.site",
+        bundle_source_name="design_system",
+        bundle_source_type="scraped_web",
+        bundle_source_names=["design_system", "devdocs_repo"],
+        bundle_source_coherent=False,
+    )
+    report = _build_report([outcome])
+
+    text_output = render_eval_text(report, show_weak_details=True)
+    summary_output = render_eval_summary_markdown(report)
+
+    assert "expected_source_summary:" in text_output
+    assert "source_confusions:" in text_output
+    assert "best_match_rank=1 path=design_system/start-here/rendering.site source=design_system" in text_output
+    assert "## Expected Sources" in summary_output
+    assert "## Source Confusions" in summary_output
+
+
 def test_assert_report_consistent_fails_on_divergent_aggregates(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     docs_dir.mkdir()
@@ -754,6 +1045,8 @@ def _outcome(
     bucket: str = "bucket-a",
     bundle_grade: str | None = None,
     query_style: str | None = "implementation",
+    expected_source_name: str | None = None,
+    matched_result_source_name: str | None = None,
 ) -> EvalOutcome:
     return EvalOutcome(
         case_id=case_id,
@@ -761,6 +1054,7 @@ def _outcome(
         bucket=bucket,
         query_style=query_style,
         concept_id=None,
+        expected_source_name=expected_source_name,
         top_k=5,
         grade=grade,
         strong_pass_top_1=grade == "STRONG PASS",
@@ -770,6 +1064,7 @@ def _outcome(
         weak_pass_top_3=grade == "WEAK PASS",
         weak_pass_top_5=grade == "WEAK PASS",
         matched_result_rank=1 if grade != "MISS" else None,
+        matched_result_source_name=matched_result_source_name,
         bundle_grade=bundle_grade,
     )
 

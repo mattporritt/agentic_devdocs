@@ -92,6 +92,29 @@ def canonical_path_key(path: str) -> str:
     return normalized
 
 
+def _result_source_metadata(result: QueryResult) -> dict[str, str | None]:
+    metadata = result.metadata_json or {}
+    source_type = metadata.get("source_type")
+    source_name = metadata.get("source_name")
+    if not source_name:
+        if result.source_file_path.lower().startswith("design_system/"):
+            source_name = "design_system"
+            source_type = source_type or "scraped_web"
+        elif source_type == "repo_markdown" or (
+            source_type is None
+            and not metadata.get("source_url")
+            and not metadata.get("canonical_url")
+        ):
+            source_name = "devdocs_repo"
+            source_type = source_type or "repo_markdown"
+    return {
+        "source_name": source_name,
+        "source_type": source_type,
+        "source_url": metadata.get("source_url"),
+        "canonical_url": metadata.get("canonical_url"),
+    }
+
+
 def is_canonical_path(path: str) -> bool:
     """Return whether a path is from the non-versioned canonical corpus."""
 
@@ -788,6 +811,7 @@ def build_context_bundles(
 
     bundles: list[ContextBundle] = []
     for rank, result in enumerate(results, start=1):
+        result_source = _result_source_metadata(result)
         section_chunks = store.get_section_chunks(result.section_id)
         document_chunks = store.get_document_chunks(result.document_id)
         index_by_id = {chunk.chunk_id: idx for idx, chunk in enumerate(section_chunks)}
@@ -806,6 +830,10 @@ def build_context_bundles(
                 content=match_content,
                 token_count=match_token_count,
                 source_file_path=result.source_file_path,
+                source_name=result_source["source_name"],
+                source_type=result_source["source_type"],
+                source_url=result_source["source_url"],
+                canonical_url=result_source["canonical_url"],
                 section_title=result.section_title,
                 heading_path=result.heading_path,
             )
@@ -821,6 +849,7 @@ def build_context_bundles(
                     compact_content = _compact_bundle_chunk_content(chunk.content)
                     compact_tokens = tokenizer.count_tokens(compact_content)
                     if total_tokens + compact_tokens <= bundle_max_tokens:
+                        chunk_source = _result_source_metadata(chunk)
                         ordered_chunks.insert(
                             0,
                             ContextBundleChunk(
@@ -829,6 +858,10 @@ def build_context_bundles(
                                 content=compact_content,
                                 token_count=compact_tokens,
                                 source_file_path=chunk.source_file_path,
+                                source_name=chunk_source["source_name"],
+                                source_type=chunk_source["source_type"],
+                                source_url=chunk_source["source_url"],
+                                canonical_url=chunk_source["canonical_url"],
                                 section_title=chunk.section_title,
                                 heading_path=chunk.heading_path,
                             ),
@@ -842,6 +875,7 @@ def build_context_bundles(
                     compact_content = _compact_bundle_chunk_content(chunk.content)
                     compact_tokens = tokenizer.count_tokens(compact_content)
                     if total_tokens + compact_tokens <= bundle_max_tokens:
+                        chunk_source = _result_source_metadata(chunk)
                         ordered_chunks.append(
                             ContextBundleChunk(
                                 chunk_id=chunk.chunk_id,
@@ -849,6 +883,10 @@ def build_context_bundles(
                                 content=compact_content,
                                 token_count=compact_tokens,
                                 source_file_path=chunk.source_file_path,
+                                source_name=chunk_source["source_name"],
+                                source_type=chunk_source["source_type"],
+                                source_url=chunk_source["source_url"],
+                                canonical_url=chunk_source["canonical_url"],
                                 section_title=chunk.section_title,
                                 heading_path=chunk.heading_path,
                             )
@@ -880,6 +918,7 @@ def build_context_bundles(
                 support_content = _compact_bundle_chunk_content(support_candidate.content)
                 support_tokens = tokenizer.count_tokens(support_content)
                 if total_tokens + support_tokens <= bundle_max_tokens:
+                    support_source = _result_source_metadata(support_candidate)
                     ordered_chunks.append(
                         ContextBundleChunk(
                             chunk_id=support_candidate.chunk_id,
@@ -887,6 +926,10 @@ def build_context_bundles(
                             content=support_content,
                             token_count=support_tokens,
                             source_file_path=support_candidate.source_file_path,
+                            source_name=support_source["source_name"],
+                            source_type=support_source["source_type"],
+                            source_url=support_source["source_url"],
+                            canonical_url=support_source["canonical_url"],
                             section_title=support_candidate.section_title,
                             heading_path=support_candidate.heading_path,
                         )
@@ -915,9 +958,14 @@ def build_context_bundles(
                                 content=trimmed_content,
                                 token_count=trimmed_tokens,
                                 source_file_path=primary_chunk.source_file_path,
+                                source_name=primary_chunk.source_name,
+                                source_type=primary_chunk.source_type,
+                                source_url=primary_chunk.source_url,
+                                canonical_url=primary_chunk.canonical_url,
                                 section_title=primary_chunk.section_title,
                                 heading_path=primary_chunk.heading_path,
                             )
+                            support_source = _result_source_metadata(support_candidate)
                             ordered_chunks.append(
                                 ContextBundleChunk(
                                     chunk_id=support_candidate.chunk_id,
@@ -925,6 +973,10 @@ def build_context_bundles(
                                     content=support_content,
                                     token_count=support_tokens,
                                     source_file_path=support_candidate.source_file_path,
+                                    source_name=support_source["source_name"],
+                                    source_type=support_source["source_type"],
+                                    source_url=support_source["source_url"],
+                                    canonical_url=support_source["canonical_url"],
                                     section_title=support_candidate.section_title,
                                     heading_path=support_candidate.heading_path,
                                 )
@@ -964,6 +1016,10 @@ def build_context_bundles(
                 score=result.score,
                 bundle_token_count=sum(chunk.token_count for chunk in ordered_chunks),
                 source_file_path=result.source_file_path,
+                source_name=result_source["source_name"],
+                source_type=result_source["source_type"],
+                source_url=result_source["source_url"],
+                canonical_url=result_source["canonical_url"],
                 document_title=result.document_title,
                 section_title=result.section_title,
                 heading_path=result.heading_path,

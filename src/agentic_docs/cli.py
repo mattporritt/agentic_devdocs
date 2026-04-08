@@ -31,6 +31,23 @@ def _emit(data: object, as_json: bool) -> None:
     typer.echo(str(data))
 
 
+def _source_fields(metadata_json: dict[str, object] | None) -> tuple[str | None, str | None, str | None, str | None]:
+    if not metadata_json:
+        return None, None, None, None
+    source_name = metadata_json.get("source_name")
+    source_type = metadata_json.get("source_type")
+    source_url = metadata_json.get("source_url")
+    canonical_url = metadata_json.get("canonical_url")
+    if not source_name and source_type == "repo_markdown":
+        source_name = "devdocs_repo"
+    return (
+        str(source_name) if source_name is not None else None,
+        str(source_type) if source_type is not None else None,
+        str(source_url) if source_url is not None else None,
+        str(canonical_url) if canonical_url is not None else None,
+    )
+
+
 def _validation_worktree_payload(repo_path: Path, allow_dirty: bool) -> dict[str, object]:
     """Validate and describe the current project worktree for trustworthy validation runs."""
 
@@ -200,6 +217,10 @@ def query(
             typer.echo(f"rank: {bundle.rank}")
             typer.echo(f"score: {bundle.score}")
             typer.echo(f"source_file_path: {bundle.source_file_path}")
+            typer.echo(f"source_name: {bundle.source_name}")
+            typer.echo(f"source_type: {bundle.source_type}")
+            typer.echo(f"source_url: {bundle.source_url}")
+            typer.echo(f"canonical_url: {bundle.canonical_url}")
             typer.echo(f"document_title: {bundle.document_title}")
             typer.echo(f"section_title: {bundle.section_title}")
             typer.echo(f"heading_path: {' > '.join(bundle.heading_path)}")
@@ -212,7 +233,8 @@ def query(
                 typer.echo(f"snippet: {bundle.snippet}")
             for chunk in bundle.chunks:
                 typer.echo(
-                    f"[{chunk.role}] {chunk.chunk_id} ({chunk.token_count} tokens) {chunk.source_file_path} {' > '.join(chunk.heading_path)}"
+                    f"[{chunk.role}] {chunk.chunk_id} ({chunk.token_count} tokens) {chunk.source_file_path} "
+                    f"{chunk.source_name or '-'} {' > '.join(chunk.heading_path)}"
                 )
                 typer.echo(chunk.content)
                 typer.echo("")
@@ -221,9 +243,14 @@ def query(
         _emit([result.model_dump() for result in results], True)
         return
     for result in results:
+        source_name, source_type, source_url, canonical_url = _source_fields(result.metadata_json)
         typer.echo(f"chunk_id: {result.chunk_id}")
         typer.echo(f"score: {result.score}")
         typer.echo(f"source_file_path: {result.source_file_path}")
+        typer.echo(f"source_name: {source_name}")
+        typer.echo(f"source_type: {source_type}")
+        typer.echo(f"source_url: {source_url}")
+        typer.echo(f"canonical_url: {canonical_url}")
         typer.echo(f"document_title: {result.document_title}")
         typer.echo(f"section_title: {result.section_title}")
         typer.echo(f"heading_path: {' > '.join(result.heading_path)}")

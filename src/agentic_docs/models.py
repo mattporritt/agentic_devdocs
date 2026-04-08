@@ -105,6 +105,10 @@ class ContextBundleChunk(BaseModel):
     content: str
     token_count: int
     source_file_path: str
+    source_name: str | None = None
+    source_type: str | None = None
+    source_url: str | None = None
+    canonical_url: str | None = None
     section_title: str | None = None
     heading_path: list[str] = Field(default_factory=list)
 
@@ -116,6 +120,10 @@ class ContextBundle(BaseModel):
     score: float
     bundle_token_count: int
     source_file_path: str
+    source_name: str | None = None
+    source_type: str | None = None
+    source_url: str | None = None
+    canonical_url: str | None = None
     document_title: str
     section_title: str | None = None
     heading_path: list[str] = Field(default_factory=list)
@@ -135,11 +143,16 @@ class EvalCase(BaseModel):
     query_style: str | None = None
     concept_id: str | None = None
     description: str | None = None
+    preferred_source_names: list[str] = Field(default_factory=list)
+    acceptable_source_names: list[str] = Field(default_factory=list)
     preferred_document_paths: list[str] = Field(default_factory=list)
     acceptable_document_paths: list[str] = Field(default_factory=list)
     preferred_heading_substrings: list[str] = Field(default_factory=list)
     acceptable_heading_substrings: list[str] = Field(default_factory=list)
     disallowed_document_paths: list[str] = Field(default_factory=list)
+    preferred_bundle_source_names: list[str] = Field(default_factory=list)
+    acceptable_bundle_source_names: list[str] = Field(default_factory=list)
+    allow_mixed_bundle_sources: bool = False
     preferred_bundle_paths: list[str] = Field(default_factory=list)
     preferred_heading_substrings_for_bundle: list[str] = Field(default_factory=list)
     required_heading_substrings_for_bundle: list[str] = Field(default_factory=list)
@@ -154,6 +167,10 @@ class EvalMatch(BaseModel):
     rank: int
     chunk_id: str
     source_file_path: str
+    source_name: str | None = None
+    source_type: str | None = None
+    source_url: str | None = None
+    canonical_url: str | None = None
     document_title: str
     section_title: str | None = None
     heading_path: list[str] = Field(default_factory=list)
@@ -182,6 +199,8 @@ class EvalOutcome(BaseModel):
     bucket: str
     query_style: str | None = None
     concept_id: str | None = None
+    expected_source_name: str | None = None
+    acceptable_source_names: list[str] = Field(default_factory=list)
     top_k: int
     grade: str
     strong_pass_top_1: bool
@@ -193,15 +212,22 @@ class EvalOutcome(BaseModel):
     matched_result_rank: int | None = None
     matched_result_path: str | None = None
     matched_result_heading: str | None = None
+    matched_result_source_name: str | None = None
+    matched_result_source_type: str | None = None
     matched_rule_type: str | None = None
     matched_result: EvalMatch | None = None
     failure_summary: str | None = None
     preferred_result_rank: int | None = None
     preferred_result_path: str | None = None
     preferred_result_heading: str | None = None
+    preferred_source_rank: int | None = None
     ranking_diagnostic: str | None = None
     bundle_grade: str | None = None
     bundle_path: str | None = None
+    bundle_source_name: str | None = None
+    bundle_source_type: str | None = None
+    bundle_source_names: list[str] = Field(default_factory=list)
+    bundle_source_coherent: bool | None = None
     bundle_token_count: int | None = None
     bundle_chunk_count: int | None = None
     bundle_selection_strategy: str | None = None
@@ -223,10 +249,13 @@ class EvalReport(BaseModel):
     top_3: EvalWindowStats
     top_5: EvalWindowStats
     buckets: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
+    expected_sources: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
     query_styles: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
     concepts: dict[str, "EvalGroupReport"] = Field(default_factory=dict)
     bundle_overall: "BundleGradeStats | None" = None
     bundle_buckets: dict[str, "BundleGradeStats"] = Field(default_factory=dict)
+    bundle_expected_sources: dict[str, "BundleGradeStats"] = Field(default_factory=dict)
+    source_confusions: list["SourceConfusionCase"] = Field(default_factory=list)
     baseline_comparison: "BaselineComparison | None" = None
     outcomes: list[EvalOutcome]
 
@@ -255,6 +284,20 @@ class BundleGradeStats(BaseModel):
     complete_rate: float
     partial_rate: float
     insufficient_rate: float
+
+
+class SourceConfusionCase(BaseModel):
+    """A case where source expectations and actual retrieved/bundled source diverged."""
+
+    case_id: str
+    query: str
+    expected_source_name: str | None = None
+    acceptable_source_names: list[str] = Field(default_factory=list)
+    matched_result_source_name: str | None = None
+    matched_result_path: str | None = None
+    bundle_source_names: list[str] = Field(default_factory=list)
+    grade: str
+    bundle_grade: str | None = None
 
 
 class BaselineMetricDelta(BaseModel):

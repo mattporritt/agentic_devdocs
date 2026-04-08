@@ -22,6 +22,7 @@ from agentic_docs.models import (
     EvalReport,
     EvalWindowStats,
     QueryResult,
+    SourceConfusionCase,
 )
 from agentic_docs.query_service import build_context_bundles, canonical_path_key, query_chunks
 
@@ -65,6 +66,44 @@ def _matches_any(substrings: list[str], haystacks: list[str]) -> list[str]:
     return matches
 
 
+def _result_source_metadata(result: QueryResult) -> dict[str, str | None]:
+    metadata = result.metadata_json or {}
+    source_type = metadata.get("source_type")
+    source_name = metadata.get("source_name")
+    if not source_name:
+        if result.source_file_path.lower().startswith("design_system/"):
+            source_name = "design_system"
+            source_type = source_type or "scraped_web"
+        elif source_type == "repo_markdown" or (
+            source_type is None
+            and not metadata.get("source_url")
+            and not metadata.get("canonical_url")
+        ):
+            source_name = "devdocs_repo"
+            source_type = source_type or "repo_markdown"
+    return {
+        "source_name": source_name,
+        "source_type": source_type,
+        "source_url": metadata.get("source_url"),
+        "canonical_url": metadata.get("canonical_url"),
+    }
+
+
+def _matches_sources(expected_sources: list[str], actual_source: str | None) -> list[str]:
+    if not actual_source:
+        return []
+    lowered_source = actual_source.lower()
+    return [source for source in expected_sources if source.lower() == lowered_source]
+
+
+def _expected_source_name(case: EvalCase) -> str | None:
+    if case.preferred_source_names:
+        return case.preferred_source_names[0]
+    if case.acceptable_source_names:
+        return case.acceptable_source_names[0]
+    return None
+
+
 def _matching_paths(expected_paths: list[str], actual_path: str) -> list[str]:
     lowered_path = actual_path.lower()
     lowered_canonical = canonical_path_key(lowered_path)
@@ -77,28 +116,54 @@ def _grade_result(case: EvalCase, result: QueryResult) -> tuple[str, list[str], 
     section_text = (result.section_title or "").lower()
     document_text = result.document_title.lower()
     haystacks = [heading_text, section_text, document_text]
+    source = _result_source_metadata(result)
+    source_name = source["source_name"]
 
     disallowed_paths = _matches_any(case.disallowed_document_paths, [lower_path, canonical_path_key(lower_path)])
     if disallowed_paths:
         return "MISS", [f"disallowed_path:{path}" for path in disallowed_paths], None
 
+    preferred_sources = _matches_sources(case.preferred_source_names, source_name)
+    acceptable_sources = _matches_sources(case.acceptable_source_names, source_name)
     preferred_paths = _matching_paths(case.preferred_document_paths, lower_path)
     acceptable_paths = _matching_paths(case.acceptable_document_paths, lower_path)
     preferred_headings = _matches_any(case.preferred_heading_substrings, haystacks)
     acceptable_headings = _matches_any(case.acceptable_heading_substrings, haystacks)
 
-    if preferred_paths or preferred_headings:
-        matched_on = [f"preferred_path:{path}" for path in preferred_paths] + [
+    source_blocks_strong = bool(case.preferred_source_names) and not preferred_sources
+    source_blocks_weak = bool(case.acceptable_source_names) and not acceptable_sources
+
+    preferred_signal = bool(preferred_paths or preferred_headings or (case.preferred_source_names and preferred_sources))
+    acceptable_signal = bool(acceptable_paths or acceptable_headings or (case.acceptable_source_names and acceptable_sources))
+
+    if preferred_signal and not source_blocks_strong:
+        matched_on = [f"preferred_source:{source}" for source in preferred_sources] + [f"preferred_path:{path}" for path in preferred_paths] + [
             f"preferred_heading:{heading}" for heading in preferred_headings
         ]
-        rule_type = "preferred_path+heading" if preferred_paths and preferred_headings else "preferred_path" if preferred_paths else "preferred_heading"
+        preferred_components = sum(bool(component) for component in (preferred_sources, preferred_paths, preferred_headings))
+        if preferred_components >= 2:
+            rule_type = "preferred_source+target"
+        elif preferred_sources:
+            rule_type = "preferred_source"
+        elif preferred_paths:
+            rule_type = "preferred_path"
+        else:
+            rule_type = "preferred_heading"
         return "STRONG PASS", matched_on, rule_type
 
-    if acceptable_paths or acceptable_headings:
-        matched_on = [f"acceptable_path:{path}" for path in acceptable_paths] + [
+    if acceptable_signal and not source_blocks_weak:
+        matched_on = [f"acceptable_source:{source}" for source in acceptable_sources] + [f"acceptable_path:{path}" for path in acceptable_paths] + [
             f"acceptable_heading:{heading}" for heading in acceptable_headings
         ]
-        rule_type = "acceptable_path+heading" if acceptable_paths and acceptable_headings else "acceptable_path" if acceptable_paths else "acceptable_heading"
+        acceptable_components = sum(bool(component) for component in (acceptable_sources, acceptable_paths, acceptable_headings))
+        if acceptable_components >= 2:
+            rule_type = "acceptable_source+target"
+        elif acceptable_sources:
+            rule_type = "acceptable_source"
+        elif acceptable_paths:
+            rule_type = "acceptable_path"
+        else:
+            rule_type = "acceptable_heading"
         return "WEAK PASS", matched_on, rule_type
 
     return "MISS", [], None
@@ -106,6 +171,12 @@ def _grade_result(case: EvalCase, result: QueryResult) -> tuple[str, list[str], 
 
 def _bundle_expected_paths(case: EvalCase) -> list[str]:
     return case.preferred_bundle_paths or case.preferred_document_paths or case.acceptable_document_paths
+
+
+def _bundle_expected_sources(case: EvalCase) -> tuple[list[str], list[str]]:
+    preferred = case.preferred_bundle_source_names or case.preferred_source_names
+    acceptable = case.acceptable_bundle_source_names or case.acceptable_source_names
+    return preferred, acceptable
 
 
 def _bundle_expected_headings(case: EvalCase) -> list[str]:
@@ -116,6 +187,16 @@ def _bundle_expected_headings(case: EvalCase) -> list[str]:
         if heading not in combined:
             combined.append(heading)
     return combined
+
+
+def _bundle_source_names(bundle: ContextBundle) -> list[str]:
+    names: list[str] = []
+    for name in [bundle.source_name, *[chunk.source_name for chunk in bundle.chunks]]:
+        if not name:
+            continue
+        if name not in names:
+            names.append(name)
+    return names
 
 
 def _bundle_haystacks(bundle: ContextBundle) -> list[str]:
@@ -165,15 +246,21 @@ def _grade_bundle(
 
     budget = _bundle_budget(case, bundle_max_tokens)
     expected_paths = _bundle_expected_paths(case)
+    preferred_bundle_sources, acceptable_bundle_sources = _bundle_expected_sources(case)
     required_headings = case.required_heading_substrings_for_bundle
     preferred_headings = _bundle_expected_headings(case)
     haystacks = _bundle_haystacks(bundle)
     bundle_paths = [bundle.source_file_path] + [chunk.source_file_path for chunk in bundle.chunks]
+    bundle_source_names = _bundle_source_names(bundle)
+    bundle_source_coherent = len(bundle_source_names) <= 1
+    primary_bundle_source = bundle.source_name or (bundle_source_names[0] if bundle_source_names else None)
     matched_paths: list[str] = []
     for path in bundle_paths:
         for match in _matching_paths(expected_paths, path):
             if match not in matched_paths:
                 matched_paths.append(match)
+    matched_preferred_sources = [source for source in bundle_source_names if source in preferred_bundle_sources]
+    matched_acceptable_sources = [source for source in bundle_source_names if source in acceptable_bundle_sources]
     required_present = _matches_any(required_headings, haystacks)
     preferred_present = _matches_any(preferred_headings, haystacks)
     missing_required = [heading for heading in required_headings if heading not in required_present]
@@ -189,6 +276,17 @@ def _grade_bundle(
         diagnostic_parts.append("bundle path matched preferred target")
     elif expected_paths:
         diagnostic_parts.append("bundle path did not match preferred target")
+    if primary_bundle_source:
+        diagnostic_parts.append(f"bundle primary source: {primary_bundle_source}")
+    if preferred_bundle_sources:
+        if matched_preferred_sources:
+            diagnostic_parts.append(f"bundle source matched preferred source: {', '.join(matched_preferred_sources)}")
+        else:
+            diagnostic_parts.append("bundle source did not match preferred source")
+    elif acceptable_bundle_sources and matched_acceptable_sources:
+        diagnostic_parts.append(f"bundle source matched acceptable source: {', '.join(matched_acceptable_sources)}")
+    if not case.allow_mixed_bundle_sources and not bundle_source_coherent:
+        diagnostic_parts.append(f"bundle mixed sources: {', '.join(bundle_source_names)}")
     if required_present:
         diagnostic_parts.append(f"required headings present: {', '.join(required_present)}")
     if missing_required:
@@ -208,7 +306,13 @@ def _grade_bundle(
         grade = "INSUFFICIENT"
     elif far_over_budget:
         grade = "INSUFFICIENT"
+    elif preferred_bundle_sources and not matched_preferred_sources and not matched_acceptable_sources:
+        grade = "INSUFFICIENT"
     elif expected_paths and not matched_paths:
+        grade = "PARTIAL"
+    elif not case.allow_mixed_bundle_sources and not bundle_source_coherent:
+        grade = "PARTIAL"
+    elif preferred_bundle_sources and not matched_preferred_sources and matched_acceptable_sources:
         grade = "PARTIAL"
     elif too_thin or truncated or redundancy_count > 0 or not within_budget:
         grade = "PARTIAL"
@@ -222,6 +326,10 @@ def _grade_bundle(
 
     return grade, {
         "bundle_path": bundle.source_file_path,
+        "bundle_source_name": primary_bundle_source,
+        "bundle_source_type": bundle.source_type,
+        "bundle_source_names": bundle_source_names,
+        "bundle_source_coherent": bundle_source_coherent,
         "bundle_token_count": bundle.bundle_token_count,
         "bundle_chunk_count": chunk_count,
         "bundle_selection_strategy": bundle.selection_strategy,
@@ -240,6 +348,9 @@ def _failure_summary(case: EvalCase, results: list[QueryResult]) -> str:
     top = results[0]
     top_path = top.source_file_path
     top_content = top.content
+    top_source = _result_source_metadata(top)["source_name"]
+    if case.preferred_source_names and top_source and top_source not in case.preferred_source_names:
+        return f"Top result came from the wrong source ({top_source}) for this query"
     if top_path.startswith("versioned_docs/"):
         return f"Top result was versioned duplicate noise: {top_path}"
     if "import " in top_content or "<" in top_content and "/>" in top_content:
@@ -252,11 +363,22 @@ def _failure_summary(case: EvalCase, results: list[QueryResult]) -> str:
 
 
 def _ranking_diagnostic(
+    case: EvalCase,
     grade: str,
     matched_rank: int | None,
     preferred_match: EvalMatch | None,
     results: list[QueryResult],
+    preferred_source_rank: int | None,
 ) -> str | None:
+    if case.preferred_source_names and results:
+        top_source = _result_source_metadata(results[0])["source_name"]
+        if top_source not in case.preferred_source_names:
+            if preferred_source_rank is not None:
+                return (
+                    f"Preferred source {case.preferred_source_names[0]} was present at rank {preferred_source_rank}, "
+                    f"but rank 1 came from {top_source}. This is a source-selection issue, not a recall issue."
+                )
+            return f"Top result came from {top_source}, but the preferred source is {case.preferred_source_names[0]}."
     if preferred_match is not None and grade == "WEAK PASS":
         top_path = results[0].source_file_path if results else "no result"
         return (
@@ -284,10 +406,19 @@ def _score_case(
     matched_result: EvalMatch | None = None
     matched_rank: int | None = None
     preferred_result: EvalMatch | None = None
+    preferred_source_rank: int | None = None
     grade = "MISS"
     matched_rule_type: str | None = None
 
+    if case.preferred_source_names:
+        for rank, result in enumerate(results, start=1):
+            source = _result_source_metadata(result)
+            if source["source_name"] in case.preferred_source_names:
+                preferred_source_rank = rank
+                break
+
     for rank, result in enumerate(results, start=1):
+        source = _result_source_metadata(result)
         result_grade, matched_on, rule_type = _grade_result(case, result)
         if result_grade == "MISS":
             continue
@@ -295,6 +426,10 @@ def _score_case(
             rank=rank,
             chunk_id=result.chunk_id,
             source_file_path=result.source_file_path,
+            source_name=source["source_name"],
+            source_type=source["source_type"],
+            source_url=source["source_url"],
+            canonical_url=source["canonical_url"],
             document_title=result.document_title,
             section_title=result.section_title,
             heading_path=result.heading_path,
@@ -323,6 +458,7 @@ def _score_case(
     weak_pass_top_5 = grade == "WEAK PASS" and matched_rank is not None and matched_rank <= 5
 
     bundle_grade, bundle_details = _grade_bundle(case, bundle, grade, bundle_max_tokens, evaluate_bundle)
+    expected_source_name = _expected_source_name(case)
 
     return EvalOutcome(
         case_id=case.id,
@@ -330,6 +466,8 @@ def _score_case(
         bucket=case.bucket,
         query_style=case.query_style,
         concept_id=case.concept_id,
+        expected_source_name=expected_source_name,
+        acceptable_source_names=case.acceptable_source_names,
         top_k=case.top_k,
         grade=grade,
         strong_pass_top_1=strong_pass_top_1,
@@ -341,15 +479,22 @@ def _score_case(
         matched_result_rank=matched_rank,
         matched_result_path=matched_result.source_file_path if matched_result else None,
         matched_result_heading=" > ".join(matched_result.heading_path) if matched_result else None,
+        matched_result_source_name=matched_result.source_name if matched_result else None,
+        matched_result_source_type=matched_result.source_type if matched_result else None,
         matched_rule_type=matched_rule_type,
         matched_result=matched_result,
         failure_summary=None if grade != "MISS" else _failure_summary(case, results),
         preferred_result_rank=preferred_result.rank if preferred_result else None,
         preferred_result_path=preferred_result.source_file_path if preferred_result else None,
         preferred_result_heading=" > ".join(preferred_result.heading_path) if preferred_result else None,
-        ranking_diagnostic=_ranking_diagnostic(grade, matched_rank, preferred_result, results),
+        preferred_source_rank=preferred_source_rank,
+        ranking_diagnostic=_ranking_diagnostic(case, grade, matched_rank, preferred_result, results, preferred_source_rank),
         bundle_grade=bundle_grade,
         bundle_path=bundle_details.get("bundle_path"),
+        bundle_source_name=bundle_details.get("bundle_source_name"),
+        bundle_source_type=bundle_details.get("bundle_source_type"),
+        bundle_source_names=bundle_details.get("bundle_source_names", []),
+        bundle_source_coherent=bundle_details.get("bundle_source_coherent"),
         bundle_token_count=bundle_details.get("bundle_token_count"),
         bundle_chunk_count=bundle_details.get("bundle_chunk_count"),
         bundle_selection_strategy=bundle_details.get("bundle_selection_strategy"),
@@ -399,10 +544,13 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
             top_3=empty_window,
             top_5=empty_window,
             buckets={},
+            expected_sources={},
             query_styles={},
             concepts={},
             bundle_overall=None,
             bundle_buckets={},
+            bundle_expected_sources={},
+            source_confusions=[],
             outcomes=[],
         )
 
@@ -410,6 +558,11 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
     weak_passes = sum(1 for outcome in outcomes if outcome.grade == "WEAK PASS")
     misses = total - strong_passes - weak_passes
     buckets = _group_reports(outcomes, key_fn=lambda outcome: outcome.bucket)
+    expected_sources = _group_reports(
+        outcomes,
+        key_fn=lambda outcome: outcome.expected_source_name,
+        include_empty=False,
+    )
     query_styles = _group_reports(
         outcomes,
         key_fn=lambda outcome: outcome.query_style,
@@ -422,6 +575,10 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
     )
     bundle_overall = _bundle_stats(outcomes)
     bundle_buckets = _bundle_group_stats(outcomes, key_fn=lambda outcome: outcome.bucket)
+    bundle_expected_sources = _bundle_group_stats(
+        outcomes,
+        key_fn=lambda outcome: outcome.expected_source_name,
+    )
     return EvalReport(
         total_queries=total,
         strong_passes=strong_passes,
@@ -431,10 +588,13 @@ def _build_report(outcomes: list[EvalOutcome]) -> EvalReport:
         top_3=_window_stats(outcomes, 3),
         top_5=_window_stats(outcomes, 5),
         buckets=buckets,
+        expected_sources=expected_sources,
         query_styles=query_styles,
         concepts=concepts,
         bundle_overall=bundle_overall,
         bundle_buckets=bundle_buckets,
+        bundle_expected_sources=bundle_expected_sources,
+        source_confusions=_source_confusion_cases(outcomes),
         outcomes=outcomes,
     )
 
@@ -665,6 +825,37 @@ def _bundle_group_stats(outcomes: list[EvalOutcome], key_fn) -> dict[str, Bundle
     return reports
 
 
+def _source_confusion_cases(outcomes: list[EvalOutcome]) -> list[SourceConfusionCase]:
+    confusions: list[SourceConfusionCase] = []
+    for outcome in outcomes:
+        if outcome.expected_source_name is None:
+            continue
+        retrieval_confused = outcome.matched_result_source_name not in {
+            outcome.expected_source_name,
+            *outcome.acceptable_source_names,
+        }
+        bundle_confused = bool(outcome.bundle_source_names) and (
+            not outcome.bundle_source_coherent
+            or any(source not in {outcome.expected_source_name, *outcome.acceptable_source_names} for source in outcome.bundle_source_names)
+        )
+        if not retrieval_confused and not bundle_confused:
+            continue
+        confusions.append(
+            SourceConfusionCase(
+                case_id=outcome.case_id,
+                query=outcome.query,
+                expected_source_name=outcome.expected_source_name,
+                acceptable_source_names=outcome.acceptable_source_names,
+                matched_result_source_name=outcome.matched_result_source_name,
+                matched_result_path=outcome.matched_result_path,
+                bundle_source_names=outcome.bundle_source_names,
+                grade=outcome.grade,
+                bundle_grade=outcome.bundle_grade,
+            )
+        )
+    return confusions
+
+
 def _group_reports(
     outcomes: list[EvalOutcome],
     key_fn,
@@ -782,6 +973,14 @@ def render_eval_text(report: EvalReport, show_weak_details: bool = False) -> str
                 f"miss={bucket_report.misses} top_1_strong={bucket_report.top_1.strong_pass_rate:.3f}"
             )
         lines.append("")
+    if report.expected_sources:
+        lines.append("expected_source_summary:")
+        for source_name, source_report in report.expected_sources.items():
+            lines.append(
+                f"  {source_name}: strong={source_report.strong_passes} weak={source_report.weak_passes} "
+                f"miss={source_report.misses} top_1_strong={source_report.top_1.strong_pass_rate:.3f}"
+            )
+        lines.append("")
     if report.query_styles:
         lines.append("query_style_summary:")
         for style, style_report in report.query_styles.items():
@@ -798,6 +997,22 @@ def render_eval_text(report: EvalReport, show_weak_details: bool = False) -> str
                 f"insufficient={bucket_report.insufficient} complete_rate={bucket_report.complete_rate:.3f}"
             )
         lines.append("")
+    if report.bundle_expected_sources:
+        lines.append("bundle_expected_source_summary:")
+        for source_name, source_report in report.bundle_expected_sources.items():
+            lines.append(
+                f"  {source_name}: complete={source_report.complete} partial={source_report.partial} "
+                f"insufficient={source_report.insufficient} complete_rate={source_report.complete_rate:.3f}"
+            )
+        lines.append("")
+    if report.source_confusions:
+        lines.append("source_confusions:")
+        for confusion in report.source_confusions:
+            lines.append(
+                f"  {confusion.case_id}: expected={confusion.expected_source_name} actual={confusion.matched_result_source_name} "
+                f"bundle_sources={','.join(confusion.bundle_source_names) or '-'} grade={confusion.grade} bundle={confusion.bundle_grade}"
+            )
+        lines.append("")
     if report.concepts:
         lines.append("concept_summary:")
         for concept, concept_report in report.concepts.items():
@@ -809,23 +1024,33 @@ def render_eval_text(report: EvalReport, show_weak_details: bool = False) -> str
     for outcome in report.outcomes:
         lines.append(f"{outcome.grade} {outcome.case_id}: {outcome.query}")
         lines.append(
-            f"  bucket={outcome.bucket} style={outcome.query_style or 'unspecified'} concept={outcome.concept_id or outcome.case_id}"
+            f"  bucket={outcome.bucket} style={outcome.query_style or 'unspecified'} concept={outcome.concept_id or outcome.case_id} "
+            f"expected_source={outcome.expected_source_name or 'unspecified'}"
         )
         if outcome.matched_result is not None:
             lines.append(
                 f"  best_match_rank={outcome.matched_result.rank} path={outcome.matched_result.source_file_path} "
+                f"source={outcome.matched_result.source_name or '-'} "
                 f"rule={outcome.matched_result.matched_rule_type} matched_on={', '.join(outcome.matched_result.matched_on)}"
+            )
+        elif outcome.matched_result_rank is not None:
+            lines.append(
+                f"  best_match_rank={outcome.matched_result_rank} path={outcome.matched_result_path} "
+                f"source={outcome.matched_result_source_name or '-'}"
             )
         if show_weak_details and outcome.preferred_result_rank is not None:
             lines.append(
                 f"  preferred_result_rank={outcome.preferred_result_rank} path={outcome.preferred_result_path} "
                 f"heading={outcome.preferred_result_heading}"
             )
+        if show_weak_details and outcome.preferred_source_rank is not None:
+            lines.append(f"  preferred_source_rank={outcome.preferred_source_rank}")
         if show_weak_details and outcome.ranking_diagnostic:
             lines.append(f"  ranking={outcome.ranking_diagnostic}")
         if outcome.bundle_grade is not None:
             lines.append(
                 f"  bundle_grade={outcome.bundle_grade} path={outcome.bundle_path} "
+                f"source={outcome.bundle_source_name or '-'} "
                 f"tokens={outcome.bundle_token_count} strategy={outcome.bundle_selection_strategy}"
             )
         if show_weak_details and outcome.bundle_diagnostic:
@@ -884,6 +1109,13 @@ def render_eval_summary_markdown(report: EvalReport) -> str:
                 f"- Bucket `{bucket}`: `{bucket_report.strong_passes}` strong / `{bucket_report.weak_passes}` weak / "
                 f"`{bucket_report.misses}` miss, top-1 strong `{bucket_report.top_1.strong_pass_rate:.3f}`"
             )
+        if report.expected_sources:
+            lines.extend(["", "## Expected Sources", ""])
+            for source_name, source_report in report.expected_sources.items():
+                lines.append(
+                    f"- Source `{source_name}`: `{source_report.strong_passes}` strong / `{source_report.weak_passes}` weak / "
+                    f"`{source_report.misses}` miss across `{source_report.total_queries}` queries"
+                )
         if report.query_styles:
             lines.extend(["", "## Query Styles", ""])
             for style, style_report in report.query_styles.items():
@@ -904,6 +1136,20 @@ def render_eval_summary_markdown(report: EvalReport) -> str:
                 lines.append(
                     f"- Bundle bucket `{bucket}`: `{bucket_report.complete}` complete / `{bucket_report.partial}` partial / "
                     f"`{bucket_report.insufficient}` insufficient, complete `{bucket_report.complete_rate:.3f}`"
+                )
+        if report.bundle_expected_sources:
+            lines.extend(["", "## Bundle Sources", ""])
+            for source_name, source_report in report.bundle_expected_sources.items():
+                lines.append(
+                    f"- Bundle source `{source_name}`: `{source_report.complete}` complete / `{source_report.partial}` partial / "
+                    f"`{source_report.insufficient}` insufficient across `{source_report.total_evaluated}` evaluated bundles"
+                )
+        if report.source_confusions:
+            lines.extend(["", "## Source Confusions", ""])
+            for confusion in report.source_confusions:
+                lines.append(
+                    f"- Case `{confusion.case_id}` expected `{confusion.expected_source_name}` but got `{confusion.matched_result_source_name}` "
+                    f"with bundle sources `{', '.join(confusion.bundle_source_names) or '-'}`"
                 )
         if report.baseline_comparison is not None and report.baseline_comparison.changed_retrieval_buckets:
             lines.extend(["", "## Changed Retrieval Buckets", ""])

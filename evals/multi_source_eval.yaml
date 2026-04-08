@@ -1,0 +1,208 @@
+cases:
+  - id: combined-admin-settings
+    bucket: devdocs-plugin-implementation
+    query_style: file_location
+    concept_id: admin-settings
+    query: Where do Moodle plugin admin settings go?
+    preferred_source_names:
+      - devdocs_repo
+    preferred_bundle_source_names:
+      - devdocs_repo
+    preferred_document_paths:
+      - docs/apis/subsystems/admin/index.md
+      - docs/apis/_files/settings-php.mdx
+    acceptable_document_paths:
+      - docs/apis.md
+    acceptable_heading_substrings:
+      - settings.php
+      - Admin settings
+    required_heading_substrings_for_bundle:
+      - settings.php
+    max_reasonable_bundle_tokens: 320
+
+  - id: combined-web-services
+    bucket: devdocs-plugin-implementation
+    query_style: implementation
+    concept_id: web-services
+    query: How do I wire up an external service in a plugin?
+    preferred_source_names:
+      - devdocs_repo
+    preferred_bundle_source_names:
+      - devdocs_repo
+    preferred_document_paths:
+      - docs/apis/subsystems/external/writing-a-service.md
+      - docs/apis/_files/db-services-php.mdx
+    acceptable_document_paths:
+      - docs/apis/subsystems/external/index.md
+      - docs/apis/subsystems/external/functions.md
+    acceptable_heading_substrings:
+      - External functions
+      - Writing a new service
+    required_heading_substrings_for_bundle:
+      - External functions
+    max_reasonable_bundle_tokens: 420
+
+  - id: combined-output-flow
+    bucket: devdocs-output-rendering
+    query_style: ambiguous
+    concept_id: output-renderers
+    query: Where does template rendering fit in Moodle UI?
+    preferred_source_names:
+      - devdocs_repo
+    preferred_bundle_source_names:
+      - devdocs_repo
+    preferred_document_paths:
+      - docs/apis/subsystems/output/index.md
+      - docs/guides/templates/index.md
+    acceptable_document_paths:
+      - docs/guides/templates/index.md
+    acceptable_heading_substrings:
+      - renderers
+      - renderable
+      - page output journey
+    required_heading_substrings_for_bundle:
+      - renderers
+    max_reasonable_bundle_tokens: 420
+    notes: Ambiguous wording that could drift toward design guidance, but the answer should still come from devdocs output/rendering docs.
+
+  - id: combined-privacy-metadata
+    bucket: devdocs-privacy
+    query_style: troubleshooting
+    concept_id: privacy-providers
+    query: What do I need to implement for plugin privacy metadata?
+    preferred_source_names:
+      - devdocs_repo
+    preferred_bundle_source_names:
+      - devdocs_repo
+    preferred_document_paths:
+      - docs/apis/subsystems/privacy/index.md
+    acceptable_heading_substrings:
+      - metadata provider
+      - implementation requirements
+    required_heading_substrings_for_bundle:
+      - metadata provider
+    max_reasonable_bundle_tokens: 420
+
+  - id: combined-css-tokens
+    bucket: design-system-developers
+    query_style: implementation
+    concept_id: css-tokens
+    query: How do I use CSS tokens from the Moodle design system?
+    preferred_source_names:
+      - design_system
+    preferred_bundle_source_names:
+      - design_system
+    preferred_document_paths:
+      - design_system/start-here/for-developers-98e3cb.site
+    preferred_heading_substrings:
+      - CSS Tokens (Recommended)
+    preferred_heading_substrings_for_bundle:
+      - CSS Tokens (Recommended)
+    required_heading_substrings_for_bundle:
+      - CSS tokens
+    max_reasonable_bundle_tokens: 220
+
+  - id: combined-semantic-colours
+    bucket: design-system-foundations
+    query_style: conceptual
+    concept_id: semantic-colour-tokens
+    query: What are semantic colour tokens?
+    preferred_source_names:
+      - design_system
+    preferred_bundle_source_names:
+      - design_system
+    preferred_document_paths:
+      - design_system/styles/colours-32c91c.site
+    preferred_heading_substrings:
+      - Semantic colour tokens
+    preferred_heading_substrings_for_bundle:
+      - Semantic colour tokens
+    required_heading_substrings_for_bundle:
+      - Semantic colour tokens
+
+  - id: combined-icon-library
+    bucket: design-system-foundations
+    query_style: file_location
+    concept_id: icon-library
+    query: Where is the Moodle icon library documented?
+    preferred_source_names:
+      - design_system
+    preferred_bundle_source_names:
+      - design_system
+    preferred_document_paths:
+      - design_system/styles/icons-385957.site
+    preferred_heading_substrings:
+      - Icon library
+    preferred_heading_substrings_for_bundle:
+      - Icon library
+    required_heading_substrings_for_bundle:
+      - Icon library
+
+  - id: combined-breakpoints
+    bucket: design-system-foundations
+    query_style: conceptual
+    concept_id: breakpoints
+    query: Where are Moodle breakpoints documented?
+    preferred_source_names:
+      - design_system
+    preferred_bundle_source_names:
+      - design_system
+    preferred_document_paths:
+      - design_system/styles/layout-889e50.site
+    preferred_heading_substrings:
+      - Breakpoints
+    preferred_heading_substrings_for_bundle:
+      - Breakpoints
+    required_heading_substrings_for_bundle:
+      - Breakpoints
+
+  - id: combined-ui-token-approach
+    bucket: cross-source-ui-guidance
+    query_style: ambiguous
+    concept_id: css-tokens
+    query: What's the Moodle-recommended token approach for UI colours?
+    preferred_source_names:
+      - design_system
+    preferred_bundle_source_names:
+      - design_system
+    preferred_document_paths:
+      - design_system/styles/colours-32c91c.site
+      - design_system/start-here/for-developers-98e3cb.site
+    acceptable_document_paths:
+      - design_system/start-here/for-designers-0808cf.site
+    acceptable_heading_substrings:
+      - tokens
+      - semantic colour tokens
+      - CSS Tokens (Recommended)
+    required_heading_substrings_for_bundle:
+      - tokens
+    max_reasonable_bundle_tokens: 320
+    notes: Cross-source-style wording that still belongs to the design-system source.
+
+  - id: combined-render-in-moodle
+    bucket: cross-source-ui-guidance
+    query_style: ambiguous
+    concept_id: output-renderers
+    query: How should this render in Moodle?
+    preferred_source_names:
+      - devdocs_repo
+    acceptable_source_names:
+      - design_system
+    preferred_bundle_source_names:
+      - devdocs_repo
+    acceptable_bundle_source_names:
+      - design_system
+    preferred_document_paths:
+      - docs/apis/subsystems/output/index.md
+      - docs/guides/templates/index.md
+    acceptable_document_paths:
+      - design_system/start-here/for-developers-98e3cb.site
+    acceptable_heading_substrings:
+      - renderers
+      - renderable
+      - templates
+      - CSS Tokens (Recommended)
+    required_heading_substrings_for_bundle:
+      - renderers
+    max_reasonable_bundle_tokens: 420
+    notes: Intentionally ambiguous wording; a design-system hit is acceptable fallback, but the preferred source is still devdocs.

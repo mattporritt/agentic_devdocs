@@ -575,6 +575,24 @@ Each case still uses explicit grading targets:
 - `concept_id` to group multiple query phrasings for the same underlying task
 - `required_heading_substrings_for_bundle` and `max_reasonable_bundle_tokens` for explicit bundle usefulness checks
 
+There is now also a combined multi-source fixture at
+[evals/multi_source_eval.yaml](/Users/mattp/projects/agentic_devdocs/evals/multi_source_eval.yaml).
+It mixes:
+
+- devdocs-only cases
+- design-system-only cases
+- intentionally cross-source UI and rendering questions where both sources may look plausible at first glance
+
+Multi-source cases can encode provenance expectations explicitly with:
+
+- `preferred_source_names`
+- `acceptable_source_names`
+- `preferred_bundle_source_names`
+- `acceptable_bundle_source_names`
+- `allow_mixed_bundle_sources`
+
+That keeps source correctness first-class instead of treating every plausible document as equally good.
+
 It covers representative questions such as:
 
 - plugin admin settings
@@ -601,6 +619,9 @@ The report exposes:
 - strong-pass counts and rates
 - weak-pass counts and rates
 - misses
+- expected-source breakdowns
+- bundle expected-source breakdowns
+- explicit source-confusion summaries when the winning result came from the wrong source
 - bucket-level breakdowns
 - query-style breakdowns
 - concept-level breakdowns across related phrasings
@@ -622,6 +643,7 @@ Bucket results help answer where retrieval is weakest.
 Query-style results help answer whether the system is more brittle on implementation, troubleshooting, or file-location wording than on cleaner conceptual phrasing.
 Concept results help answer whether retrieval is brittle to alternate phrasings of the same task.
 Bundle results help answer whether the retrieved context is actually actionable for an agent, especially on file-location and implementation-guide queries.
+Expected-source results help answer whether the right authoritative source won.
 
 ## Context Bundles
 
@@ -664,6 +686,13 @@ Bundle usefulness is now measured explicitly in eval runs. The current heuristic
 - `INSUFFICIENT`: critical required heading is missing, no usable bundle was produced, or the bundle is significantly over budget
 
 This lets the benchmark expose cases where retrieval is already strong but the returned context package is still weak for an agent.
+
+In multi-source eval runs, bundle usefulness also stays source-aware:
+
+- most bundles are expected to stay source-coherent
+- preferred bundle source names can be required explicitly
+- mixed-source bundles are downgraded unless the fixture allows them
+- bundle diagnostics report the winning source, all included bundle source names, and whether the bundle remained source-coherent
 
 This matters most for concrete task queries such as:
 
