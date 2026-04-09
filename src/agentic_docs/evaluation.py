@@ -1,4 +1,9 @@
-"""Lightweight retrieval evaluation harness with explicit strong/weak grading."""
+"""Evaluation, reporting, and baseline comparison for retrieval and bundles.
+
+The guiding design constraint here is trustworthiness: the same canonical report object
+drives JSON, text, and markdown outputs so current-run quality and baseline comparison
+cannot silently diverge.
+"""
 
 from __future__ import annotations
 
@@ -24,6 +29,7 @@ from agentic_docs.models import (
     QueryResult,
     SourceConfusionCase,
 )
+from agentic_docs.provenance import result_source_metadata
 from agentic_docs.query_service import build_context_bundles, canonical_path_key, query_chunks
 
 
@@ -66,29 +72,6 @@ def _matches_any(substrings: list[str], haystacks: list[str]) -> list[str]:
     return matches
 
 
-def _result_source_metadata(result: QueryResult) -> dict[str, str | None]:
-    metadata = result.metadata_json or {}
-    source_type = metadata.get("source_type")
-    source_name = metadata.get("source_name")
-    if not source_name:
-        if result.source_file_path.lower().startswith("design_system/"):
-            source_name = "design_system"
-            source_type = source_type or "scraped_web"
-        elif source_type == "repo_markdown" or (
-            source_type is None
-            and not metadata.get("source_url")
-            and not metadata.get("canonical_url")
-        ):
-            source_name = "devdocs_repo"
-            source_type = source_type or "repo_markdown"
-    return {
-        "source_name": source_name,
-        "source_type": source_type,
-        "source_url": metadata.get("source_url"),
-        "canonical_url": metadata.get("canonical_url"),
-    }
-
-
 def _matches_sources(expected_sources: list[str], actual_source: str | None) -> list[str]:
     if not actual_source:
         return []
@@ -111,12 +94,14 @@ def _matching_paths(expected_paths: list[str], actual_path: str) -> list[str]:
 
 
 def _grade_result(case: EvalCase, result: QueryResult) -> tuple[str, list[str], str | None]:
+    """Grade one retrieval hit against an eval case with explicit source-aware rules."""
+
     lower_path = result.source_file_path.lower()
     heading_text = " > ".join(result.heading_path).lower()
     section_text = (result.section_title or "").lower()
     document_text = result.document_title.lower()
     haystacks = [heading_text, section_text, document_text]
-    source = _result_source_metadata(result)
+    source = result_source_metadata(result)
     source_name = source["source_name"]
 
     disallowed_paths = _matches_any(case.disallowed_document_paths, [lower_path, canonical_path_key(lower_path)])
@@ -239,6 +224,8 @@ def _grade_bundle(
     bundle_max_tokens: int,
     evaluate_bundle: bool,
 ) -> tuple[str | None, dict[str, object]]:
+    """Grade a built context bundle independently from retrieval correctness."""
+
     if not evaluate_bundle:
         return None, {}
     if bundle is None:
@@ -348,7 +335,7 @@ def _failure_summary(case: EvalCase, results: list[QueryResult]) -> str:
     top = results[0]
     top_path = top.source_file_path
     top_content = top.content
-    top_source = _result_source_metadata(top)["source_name"]
+    top_source = result_source_metadata(top)["source_name"]
     if case.preferred_source_names and top_source and top_source not in case.preferred_source_names:
         return f"Top result came from the wrong source ({top_source}) for this query"
     if top_path.startswith("versioned_docs/"):
@@ -371,7 +358,7 @@ def _ranking_diagnostic(
     preferred_source_rank: int | None,
 ) -> str | None:
     if case.preferred_source_names and results:
-        top_source = _result_source_metadata(results[0])["source_name"]
+        top_source = result_source_metadata(results[0])["source_name"]
         if top_source not in case.preferred_source_names:
             if preferred_source_rank is not None:
                 return (
@@ -412,13 +399,13 @@ def _score_case(
 
     if case.preferred_source_names:
         for rank, result in enumerate(results, start=1):
-            source = _result_source_metadata(result)
+            source = result_source_metadata(result)
             if source["source_name"] in case.preferred_source_names:
                 preferred_source_rank = rank
                 break
 
     for rank, result in enumerate(results, start=1):
-        source = _result_source_metadata(result)
+        source = result_source_metadata(result)
         result_grade, matched_on, rule_type = _grade_result(case, result)
         if result_grade == "MISS":
             continue

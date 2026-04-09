@@ -1,4 +1,9 @@
-"""Retrieval-facing query helpers."""
+"""Query profiling, reranking, and context-bundle assembly.
+
+This module contains the most retrieval-specific logic in the project. It intentionally
+uses explicit, inspectable heuristics so ranking and bundle behavior can be debugged,
+benchmarked, and tuned without hidden model-driven steps.
+"""
 
 from __future__ import annotations
 
@@ -7,11 +12,15 @@ import re
 from pathlib import Path
 
 from agentic_docs.models import ContextBundle, ContextBundleChunk, QueryResult
+from agentic_docs.provenance import result_source_metadata
 from agentic_docs.storage import SQLiteStore
 from agentic_docs.tokenizers import get_tokenizer
 
 
 TOKEN_PATTERN = re.compile(r"[A-Za-z0-9_]+")
+# Query normalization intentionally keeps action verbs such as "define" and
+# "register". Those verbs are important for distinguishing conceptual queries
+# from implementation-guide and file-location queries later in the pipeline.
 STOPWORDS = {
     "a",
     "an",
@@ -92,29 +101,6 @@ def canonical_path_key(path: str) -> str:
     return normalized
 
 
-def _result_source_metadata(result: QueryResult) -> dict[str, str | None]:
-    metadata = result.metadata_json or {}
-    source_type = metadata.get("source_type")
-    source_name = metadata.get("source_name")
-    if not source_name:
-        if result.source_file_path.lower().startswith("design_system/"):
-            source_name = "design_system"
-            source_type = source_type or "scraped_web"
-        elif source_type == "repo_markdown" or (
-            source_type is None
-            and not metadata.get("source_url")
-            and not metadata.get("canonical_url")
-        ):
-            source_name = "devdocs_repo"
-            source_type = source_type or "repo_markdown"
-    return {
-        "source_name": source_name,
-        "source_type": source_type,
-        "source_url": metadata.get("source_url"),
-        "canonical_url": metadata.get("canonical_url"),
-    }
-
-
 def is_canonical_path(path: str) -> bool:
     """Return whether a path is from the non-versioned canonical corpus."""
 
@@ -166,6 +152,8 @@ FILE_ANCHOR_PATTERN = re.compile(r"`?([A-Za-z0-9_./-]+\.(?:php|mdx|md|js|mustach
 
 
 def classify_task_intent(query_text: str, tokens: list[str]) -> str:
+    """Assign a small explicit task intent for bundle assembly and reranking."""
+
     lowered = query_text.lower()
     if FLOW_QUERY_PATTERN.search(lowered):
         return "flow_explainer"
@@ -179,6 +167,8 @@ def classify_task_intent(query_text: str, tokens: list[str]) -> str:
 
 
 def _expanded_tokens(tokens: list[str]) -> list[str]:
+    """Expand the lexical query with singular forms and hand-written aliases."""
+
     expanded: list[str] = []
     for token in tokens:
         if token not in expanded:
@@ -194,6 +184,12 @@ def _expanded_tokens(tokens: list[str]) -> list[str]:
 
 
 def _concept_families(tokens: list[str]) -> list[str]:
+    """Map the expanded query vocabulary onto explicit concept families.
+
+    These families intentionally stay visible in diagnostics so weak cases can be
+    tuned without guessing which rule fired.
+    """
+
     expanded = set(_expanded_tokens(tokens))
     families: list[str] = []
     if {"design", "system"} <= expanded and {
@@ -258,6 +254,8 @@ def build_query_profile(query_text: str) -> QueryProfile:
 
 
 def _build_fts_queries(query_text: str) -> list[str]:
+    """Build a small ordered FTS query set from the normalized user query."""
+
     normalized, tokens = normalize_query_text(query_text)
     if not tokens:
         return [f'"{query_text.strip()}"'] if query_text.strip() else []
@@ -640,6 +638,8 @@ def _generic_chunk_penalty(result: QueryResult, heading_overlap: int, title_over
 
 
 def _score_result(result: QueryResult, profile: QueryProfile) -> tuple[float, dict[str, float | int | str | list[str]]]:
+    """Score one retrieval candidate with an explicit, inspectable breakdown."""
+
     expanded_tokens = profile.expanded_tokens
     phrases = _query_phrases(profile.tokens)
     title_text = result.document_title.lower()
@@ -734,6 +734,8 @@ def _score_result(result: QueryResult, profile: QueryProfile) -> tuple[float, di
 
 
 def _rerank_results(results: list[QueryResult], profile: QueryProfile, top_k: int) -> list[QueryResult]:
+    """Apply reranking and conservative deduplication to lexical candidates."""
+
     scored: list[QueryResult] = []
     for result in results:
         weighted_score, breakdown = _score_result(result, profile)
@@ -801,7 +803,12 @@ def build_context_bundles(
     bundle_max_tokens: int = 600,
     tokenizer_name: str = "openai",
 ) -> list[ContextBundle]:
-    """Build compact, traceable context bundles from query results."""
+    """Build compact, traceable context bundles from query results.
+
+    Every bundle contains the primary match chunk. Depending on the task intent and
+    token budget, the bundle may add nearby same-section context or one support chunk
+    that contributes a concrete file anchor or explanatory context.
+    """
 
     store = SQLiteStore(db_path)
     store.initialize()
@@ -811,7 +818,7 @@ def build_context_bundles(
 
     bundles: list[ContextBundle] = []
     for rank, result in enumerate(results, start=1):
-        result_source = _result_source_metadata(result)
+        result_source = result_source_metadata(result)
         section_chunks = store.get_section_chunks(result.section_id)
         document_chunks = store.get_document_chunks(result.document_id)
         index_by_id = {chunk.chunk_id: idx for idx, chunk in enumerate(section_chunks)}
@@ -849,7 +856,7 @@ def build_context_bundles(
                     compact_content = _compact_bundle_chunk_content(chunk.content)
                     compact_tokens = tokenizer.count_tokens(compact_content)
                     if total_tokens + compact_tokens <= bundle_max_tokens:
-                        chunk_source = _result_source_metadata(chunk)
+                        chunk_source = result_source_metadata(chunk)
                         ordered_chunks.insert(
                             0,
                             ContextBundleChunk(
@@ -875,7 +882,7 @@ def build_context_bundles(
                     compact_content = _compact_bundle_chunk_content(chunk.content)
                     compact_tokens = tokenizer.count_tokens(compact_content)
                     if total_tokens + compact_tokens <= bundle_max_tokens:
-                        chunk_source = _result_source_metadata(chunk)
+                        chunk_source = result_source_metadata(chunk)
                         ordered_chunks.append(
                             ContextBundleChunk(
                                 chunk_id=chunk.chunk_id,
@@ -919,7 +926,7 @@ def build_context_bundles(
                 support_content = _compact_bundle_chunk_content(support_candidate.content)
                 support_tokens = tokenizer.count_tokens(support_content)
                 if total_tokens + support_tokens <= bundle_max_tokens:
-                    support_source = _result_source_metadata(support_candidate)
+                    support_source = result_source_metadata(support_candidate)
                     ordered_chunks.append(
                         ContextBundleChunk(
                             chunk_id=support_candidate.chunk_id,
@@ -967,7 +974,7 @@ def build_context_bundles(
                                 section_title=primary_chunk.section_title,
                                 heading_path=primary_chunk.heading_path,
                             )
-                            support_source = _result_source_metadata(support_candidate)
+                            support_source = result_source_metadata(support_candidate)
                             ordered_chunks.append(
                                 ContextBundleChunk(
                                     chunk_id=support_candidate.chunk_id,
@@ -1089,6 +1096,8 @@ def _support_chunk_reason(
     bundle_max_tokens: int,
     total_tokens: int,
 ) -> str | None:
+    """Return the explicit reason a bundle should search for one support chunk."""
+
     if profile is None or bundle_max_tokens <= total_tokens:
         return None
     if profile.task_intent != "general":
@@ -1114,6 +1123,8 @@ def _support_chunk_reason(
 
 
 def _expected_anchor_terms(profile: QueryProfile) -> list[str]:
+    """Return concrete file or heading anchors that make a task-oriented answer actionable."""
+
     anchors: list[str] = []
     expanded = set(profile.expanded_tokens)
     if {"setting", "settings", "admin"} & expanded:
@@ -1153,6 +1164,8 @@ def _support_keyword_overlap(candidate: QueryResult, profile: QueryProfile) -> i
 
 
 def _candidate_support_score(candidate: QueryResult, primary: QueryResult, profile: QueryProfile) -> float:
+    """Score support chunks for anchor quality, concept fit, and compact usefulness."""
+
     score = 0.0
     anchors = _extract_file_anchors(candidate.content)
     heading_text = " > ".join(candidate.heading_path).lower()
@@ -1273,6 +1286,8 @@ def _select_task_support_chunk(
     existing_chunk_ids: set[str],
     preferred_support_budget: int | None = None,
 ) -> QueryResult | None:
+    """Choose the single best support chunk for a bundle, if one clearly helps."""
+
     support_pool: list[QueryResult] = []
     seen_ids = set(existing_chunk_ids)
 

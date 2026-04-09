@@ -1312,3 +1312,18 @@ def test_load_eval_report_artifact_supports_verify_payload(tmp_path: Path) -> No
     loaded = load_eval_report_artifact(artifact)
 
     assert loaded.strong_passes == 1
+
+
+def test_load_eval_report_artifact_supports_raw_eval_payload(tmp_path: Path) -> None:
+    report = _report(
+        strong=1,
+        weak=0,
+        misses=0,
+        outcomes=[_outcome("case-a", "Query A", "STRONG PASS")],
+    )
+    artifact = tmp_path / "eval.json"
+    artifact.write_text(json.dumps(report.model_dump()), encoding="utf-8")
+
+    loaded = load_eval_report_artifact(artifact)
+
+    assert loaded.strong_passes == 1

@@ -68,6 +68,63 @@ Still deferred:
 - broad non-markdown format support beyond the design-system scraper
 - Moodle-specific semantic enrichment
 
+## Audience And Reading Guide
+
+This repository now has two kinds of documentation:
+
+- this README is the practical operator guide for installing, ingesting, querying, validating, and consuming artifacts
+- [docs/architecture.md](/Users/mattp/projects/agentic_devdocs/docs/architecture.md) describes the pipeline, main modules, data flow, and invariants
+- [docs/agent-guide.md](/Users/mattp/projects/agentic_devdocs/docs/agent-guide.md) is aimed at maintainers and future AI coding agents who need to extend the project safely
+
+If you are new to the project, read this file first, then the architecture guide if you need to modify code.
+
+## Product Scope Today
+
+`agentic-docs` is intentionally narrow. It is not trying to be a general search engine, a chatbot, or a Moodle orchestration layer.
+
+The current product is:
+
+- a CLI-first ingestion pipeline for authoritative Moodle documentation sources
+- a local SQLite retrieval index with explicit, inspectable reranking
+- a provenance-aware context-bundle builder
+- a verification and evaluation harness for keeping retrieval and bundle behavior trustworthy
+- a stable runtime-facing JSON contract for downstream agent runtimes
+
+The current sources are:
+
+- Moodle developer docs from the public git repository
+- Moodle Design System docs from the public `design.moodle.com` site
+
+The current retrieval focus is documentation lookup for agentic coding workflows, especially:
+
+- conceptual subsystem explanations
+- implementation how-tos
+- file-location guidance
+- compact runtime bundles with clear provenance
+
+## Workflow Map
+
+The prompt language used in earlier phases talked about workflows such as "smoke", "discover", "compare", and "validate-tasks". This repository uses a smaller CLI vocabulary today.
+
+Current workflow map:
+
+- `sync`: clone or update the Moodle devdocs source repo
+- `ingest`: parse repo-based markdown/MDX and build a local SQLite retrieval corpus
+- `ingest-site`: scrape `design.moodle.com` and build the same local SQLite retrieval corpus format
+- `query`: inspect retrieval results, context bundles, or the runtime JSON contract
+- `stats`, `inspect-doc`, `inspect-chunk`: inspect the indexed corpus
+- `eval`: run the strict retrieval and bundle benchmark against an existing database
+- `verify-devdocs`: run the end-to-end devdocs validation workflow sequentially on a fresh corpus snapshot
+- `verify-site`: run the equivalent validation workflow for the design-system source
+
+Closest mapping to the older workflow names:
+
+- "smoke" is best represented by `verify-devdocs` or `verify-site`, or by a manual `query` plus `stats` run
+- "compare" is handled by `--baseline` on `eval`, `verify-devdocs`, and `verify-site`
+- "discover" and "validate-tasks" are not separate commands in this codebase today
+
+That distinction matters because the documentation below reflects the actual CLI, not a larger planned workflow surface.
+
 ## Architecture overview
 
 Pipeline:
@@ -90,12 +147,28 @@ Core modules:
 - `agentic_docs.parser`: markdown discovery and heading-aware section extraction
 - `agentic_docs.site_ingest`: bounded design-system scraping and ProseMirror-to-section extraction
 - `agentic_docs.models`: canonical Pydantic models
+- `agentic_docs.provenance`: shared source normalization helpers used by query, eval, and CLI output
 - `agentic_docs.tokenizers`: tokenizer abstraction plus OpenAI/tiktoken adapter
 - `agentic_docs.chunking`: token-aware retrieval chunk construction
 - `agentic_docs.storage`: SQLite schema, persistence, FTS5, and inspection helpers
 - `agentic_docs.query_service`: query normalization, retrieval, and context bundle assembly
+- `agentic_docs.runtime_contract`: mapping from bundles to the stable runtime-facing JSON contract
 - `agentic_docs.evaluation`: eval loading and scoring
 - `agentic_docs.cli`: Typer CLI
+
+## Preparing Your Environment
+
+You do not need a running Moodle application server or database to use this tool. `agentic-docs` works against documentation sources, not against a live Moodle site.
+
+Typical local setup looks like this:
+
+1. Create a Python virtual environment for the tool itself.
+2. Choose a local directory for the Moodle devdocs git checkout.
+3. Choose a local SQLite database path for the retrieval corpus.
+4. Optionally choose a second SQLite database for the design-system corpus, or a combined database if you want both sources together.
+5. Keep scratch or review artifacts under `./_smoke_test` when you are experimenting locally.
+
+If you are working on Moodle code in a separate checkout, you can keep `agentic-docs` beside it and query the documentation database as part of your development workflow. The tool does not modify the Moodle codebase.
 
 ## Installation
 
@@ -105,6 +178,65 @@ Create a virtual environment and install the package:
 python3.12 -m venv .venv
 . .venv/bin/activate
 python -m pip install -e ".[dev]"
+```
+
+## Quick Start
+
+### Devdocs only
+
+```bash
+agentic-docs sync \
+  --repo-url https://github.com/moodle/devdocs/ \
+  --local-path ./_data/devdocs
+
+agentic-docs ingest \
+  --source ./_data/devdocs \
+  --db-path ./_data/devdocs.db \
+  --tokenizer openai \
+  --max-tokens 400 \
+  --overlap-tokens 60
+
+agentic-docs query \
+  "Where do Moodle plugin admin settings go?" \
+  --db-path ./_data/devdocs.db \
+  --context-bundle \
+  --explain-ranking \
+  --explain-bundle
+```
+
+### Design system only
+
+```bash
+agentic-docs ingest-site \
+  --base-url https://design.moodle.com \
+  --db-path ./_data/design-system.db \
+  --tokenizer openai \
+  --max-tokens 400 \
+  --overlap-tokens 60
+
+agentic-docs query \
+  "What are semantic colour tokens?" \
+  --db-path ./_data/design-system.db \
+  --json-contract
+```
+
+### Combined multi-source corpus
+
+The current codebase supports shared-schema multi-source retrieval. The simplest way to build a combined corpus is to ingest both sources into the same database path in sequence.
+
+```bash
+agentic-docs ingest \
+  --source ./_data/devdocs \
+  --db-path ./_data/multi-source.db
+
+agentic-docs ingest-site \
+  --base-url https://design.moodle.com \
+  --db-path ./_data/multi-source.db
+
+agentic-docs query \
+  "How should this render in Moodle?" \
+  --db-path ./_data/multi-source.db \
+  --json-contract
 ```
 
 ## Verify Against Moodle Devdocs
@@ -141,6 +273,48 @@ This guard exists because validation artifacts are only trustworthy when they ca
 The current public Moodle devdocs repo contains markdown and MDX content across directories such as `docs/`, `versioned_docs/`, and `general/`, and the current ingestion path is intentionally broad enough to cover that real structure.
 
 When the corpus contains both canonical and versioned copies of substantively similar docs, retrieval prefers the canonical non-versioned path but still allows versioned docs through when they remain the best available match.
+
+## Validation, Verification, And Comparison Workflows
+
+There are three common ways to assess the system today:
+
+### 1. Inspect an existing corpus
+
+Use this when the database already exists and you want to check retrieval or bundle behavior directly.
+
+```bash
+agentic-docs query "Forms API validation" --db-path ./_data/devdocs.db --context-bundle --json
+agentic-docs stats --db-path ./_data/devdocs.db --json
+```
+
+### 2. Evaluate an existing corpus
+
+Use `eval` when you already trust the database contents and want to score them against a fixture.
+
+```bash
+agentic-docs eval \
+  --db-path ./_data/devdocs.db \
+  --eval-file ./evals/moodle_devdocs_eval.yaml \
+  --with-bundles \
+  --show-weak-details
+```
+
+### 3. Run a full sequential verification workflow
+
+Use `verify-devdocs` or `verify-site` when you want a trustworthy artifact bundle for a fresh ingest and test run.
+
+Those commands:
+
+- build or refresh the source corpus
+- run evaluation sequentially on the same database snapshot
+- enforce a clean git worktree by default
+- record commit hashes, worktree state, and generated artifacts for later review
+
+### When to use baseline comparison
+
+Use `--baseline` when the question is "did this run get better, worse, or stay the same relative to a known earlier artifact?"
+
+Baseline comparison is explicit and file-based. There is no implicit "latest run" state.
 
 ## Example workflow
 
@@ -562,6 +736,52 @@ The eval command reports:
 
 Use `--json` for machine-readable output suitable for automation or later comparison between runs.
 
+## Artifacts And What They Mean
+
+The project produces two broad classes of artifacts:
+
+### 1. Retrieval databases
+
+SQLite databases such as:
+
+- `./_data/devdocs.db`
+- `./_data/design-system.db`
+- `./_data/multi-source.db`
+
+These contain:
+
+- canonical documents
+- extracted sections
+- token-aware chunks
+- FTS5 index rows
+- source metadata and provenance
+
+### 2. Validation run bundles
+
+Sequential validation runs typically write a timestamped directory under `verification_runs/`, for example:
+
+- `summary.md`
+- `verify_devdocs.json` or `verify_site.json`
+- `eval.json`
+- `eval.txt`
+- `stats.json`
+- `pytest.txt`
+- `git_status.txt`
+
+These are meant to be review artifacts, not just temporary logs.
+
+At a glance:
+
+- `summary.md` is the human-readable summary for a run
+- `verify_*.json` is the end-to-end workflow payload
+- `eval.json` is the canonical machine-readable evaluation report
+- `eval.txt` is the plain-text rendering of the same evaluation report
+- `stats.json` describes the indexed corpus
+- `pytest.txt` records test status for that run
+- `git_status.txt` records worktree state
+
+The runtime JSON contract produced by `query --json-contract` is a separate, downstream-facing artifact intended for runtime composition rather than validation review.
+
 One recent example of this tuning loop was the final `web-services-howto` weak retrieval case. The bundle layer was already recovering with `db/services.php` support, but the primary retrieval winner was still a broad web-services overview. That was fixed by adding an explicit web-services concept family bonus for `writing-a-service` style implementation pages, while keeping the logic visible in ranking explanations.
 
 ## Schema
@@ -777,6 +997,64 @@ Bundle usefulness is now measured explicitly in eval runs. The current heuristic
 - `INSUFFICIENT`: critical required heading is missing, no usable bundle was produced, or the bundle is significantly over budget
 
 This lets the benchmark expose cases where retrieval is already strong but the returned context package is still weak for an agent.
+
+## Testing And Local Maintenance
+
+Run the full suite:
+
+```bash
+PYTHONPATH=./.vendor:./src pytest -q
+```
+
+Useful narrower runs:
+
+```bash
+PYTHONPATH=./.vendor:./src pytest -q tests/test_query_service.py
+PYTHONPATH=./.vendor:./src pytest -q tests/test_evaluation.py
+PYTHONPATH=./.vendor:./src pytest -q tests/test_cli.py -k json_contract
+```
+
+The test suite is intentionally a mix of:
+
+- unit tests for normalization, scoring, provenance, and reporting helpers
+- integration tests for ingest/query/eval CLI flows
+- regression tests for previously discovered ranking, bundle, and reporting failures
+
+Before refactoring dense logic, the expectation is:
+
+- add or update a focused test first when practical
+- preserve behavior through the refactor
+- use the full suite as proof that the cleanup did not silently change the tool
+
+## Current Limitations
+
+The project is intentionally conservative.
+
+Important current limits:
+
+- retrieval is lexical plus explicit reranking, not semantic embedding search
+- the design-system ingestion path is purpose-built for the current `design.moodle.com` structure, not a general website crawler
+- bundle summaries and key points are extracted heuristically, not LLM-generated
+- validation is only as representative as the current eval fixtures
+- the runtime contract is CLI-only today; there is no HTTP service layer yet
+- multi-source retrieval is source-aware, but it is still built around a single local SQLite corpus rather than a more elaborate orchestration layer
+
+These are deliberate tradeoffs for inspectability and local trustworthiness, not accidental omissions.
+
+## Maintenance Notes
+
+If you plan to extend the project, read these alongside the code:
+
+- [docs/architecture.md](/Users/mattp/projects/agentic_devdocs/docs/architecture.md)
+- [docs/agent-guide.md](/Users/mattp/projects/agentic_devdocs/docs/agent-guide.md)
+
+Those files describe:
+
+- module responsibilities
+- important invariants
+- source provenance rules
+- evaluation/reporting expectations
+- safe extension patterns for retrieval, bundle logic, and fixtures
 
 In multi-source eval runs, bundle usefulness also stays source-aware:
 

@@ -1,4 +1,8 @@
-"""SQLite persistence and FTS5 retrieval support."""
+"""SQLite persistence, inspection, and FTS5 retrieval support.
+
+The storage layer is intentionally explicit: documents, sections, chunks, and the FTS
+index all have first-class tables so artifacts stay easy to inspect and migrate.
+"""
 
 from __future__ import annotations
 
@@ -67,6 +71,8 @@ class SQLiteStore:
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
     def connect(self) -> sqlite3.Connection:
+        """Open a SQLite connection with row access by column name."""
+
         connection = sqlite3.connect(self.db_path)
         connection.row_factory = sqlite3.Row
         return connection
@@ -97,6 +103,8 @@ class SQLiteStore:
             connection.execute(f"ALTER TABLE documents ADD COLUMN {column} {ddl}")
 
     def reindex(self) -> None:
+        """Clear all persisted corpus state before rebuilding a database snapshot."""
+
         with self.connect() as connection:
             connection.execute("DELETE FROM chunks_fts")
             connection.execute("DELETE FROM chunks")
@@ -105,6 +113,8 @@ class SQLiteStore:
             connection.commit()
 
     def store_document(self, document: DocumentModel, chunks: list[ChunkModel]) -> None:
+        """Persist one canonical document and its chunks into the shared schema."""
+
         with self.connect() as connection:
             connection.execute("DELETE FROM chunks_fts WHERE source_path = ?", (document.metadata.source_path,))
             connection.execute("DELETE FROM documents WHERE id = ?", (document.id,))
@@ -186,6 +196,8 @@ class SQLiteStore:
             connection.commit()
 
     def stats(self) -> dict[str, int]:
+        """Return top-level corpus counts for documents, sections, and chunks."""
+
         with self.connect() as connection:
             documents = connection.execute("SELECT COUNT(*) FROM documents").fetchone()[0]
             sections = connection.execute("SELECT COUNT(*) FROM sections").fetchone()[0]

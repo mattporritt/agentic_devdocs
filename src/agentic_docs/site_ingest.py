@@ -143,7 +143,11 @@ def _shared_headers(bootstrap: DesignSiteBootstrap) -> dict[str, str]:
 
 
 def fetch_design_site_pages(bootstrap: DesignSiteBootstrap) -> list[dict[str, Any]]:
-    """Fetch page bodies for the shared design-system site."""
+    """Fetch page bodies for the shared design-system site.
+
+    This intentionally uses the same JSON payload the live shared site uses rather
+    than attempting a broad crawl of rendered HTML pages.
+    """
 
     payload_text = _request_text(
         f"{bootstrap.base_url}/api/styleguide/load_pages",
@@ -189,6 +193,8 @@ def should_include_design_page(page: dict[str, Any], page_info: dict[str, Any] |
 
 
 def _parse_json_node(raw: Any) -> dict[str, Any] | None:
+    """Accept either decoded dict payloads or serialized JSON node blobs."""
+
     if raw is None:
         return None
     if isinstance(raw, dict):
@@ -202,6 +208,8 @@ def _parse_json_node(raw: Any) -> dict[str, Any] | None:
 
 
 def _render_inline_text(node: dict[str, Any]) -> str:
+    """Render a minimal readable inline text representation from ProseMirror nodes."""
+
     node_type = node.get("type")
     if node_type == "text":
         text = node.get("text", "")
