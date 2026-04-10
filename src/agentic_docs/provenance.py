@@ -18,6 +18,18 @@ def infer_source_name(source_file_path: str, source_name: str | None, source_typ
     return None
 
 
+def infer_source_type(source_file_path: str, source_name: str | None, source_type: str | None) -> str | None:
+    """Return a stable source type for both explicit and legacy source rows."""
+
+    normalized_path = source_file_path.replace("\\", "/").lower()
+    if normalized_path.startswith("design_system/") or "/design_system/" in normalized_path:
+        return source_type or "scraped_web"
+    normalized_name = infer_source_name(source_file_path, source_name, source_type)
+    if normalized_name == "devdocs_repo":
+        return source_type or "repo_markdown"
+    return source_type
+
+
 def source_fields_from_metadata(
     metadata_json: dict[str, object] | None,
     *,
@@ -36,9 +48,14 @@ def source_fields_from_metadata(
         str(source_name) if source_name is not None else None,
         str(source_type) if source_type is not None else None,
     )
+    normalized_type = infer_source_type(
+        source_file_path,
+        str(source_name) if source_name is not None else None,
+        str(source_type) if source_type is not None else None,
+    )
     return (
         normalized_name,
-        str(source_type) if source_type is not None else None,
+        normalized_type,
         str(source_url) if source_url is not None else None,
         str(canonical_url) if canonical_url is not None else None,
     )

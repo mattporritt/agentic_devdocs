@@ -14,7 +14,7 @@ from agentic_docs.models import (
     RuntimeContractSection,
     RuntimeContractSource,
 )
-from agentic_docs.provenance import infer_source_name
+from agentic_docs.provenance import infer_source_name, infer_source_type
 from agentic_docs.query_service import build_query_profile
 
 
@@ -117,6 +117,7 @@ def build_runtime_contract(query_text: str, bundles: list, top_k: int) -> Runtim
         ]
         file_anchors = _extract_contract_file_anchors([chunk.content for chunk in bundle.chunks])
         source_name = infer_source_name(bundle.source_file_path, bundle.source_name, bundle.source_type)
+        source_type = infer_source_type(bundle.source_file_path, bundle.source_name, bundle.source_type)
         results.append(
             RuntimeContractResult(
                 id=_stable_contract_id(
@@ -128,7 +129,7 @@ def build_runtime_contract(query_text: str, bundles: list, top_k: int) -> Runtim
                 confidence=_runtime_confidence(bundle),
                 source=RuntimeContractSource(
                     name=source_name,
-                    type=bundle.source_type,
+                    type=source_type,
                     url=bundle.source_url,
                     canonical_url=bundle.canonical_url,
                     path=bundle.source_file_path,

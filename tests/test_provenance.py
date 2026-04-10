@@ -1,5 +1,5 @@
 from agentic_docs.models import QueryResult
-from agentic_docs.provenance import infer_source_name, result_source_metadata, source_fields_from_metadata
+from agentic_docs.provenance import infer_source_name, infer_source_type, result_source_metadata, source_fields_from_metadata
 
 
 def test_infer_source_name_prefers_design_system_path() -> None:
@@ -16,6 +16,11 @@ def test_source_fields_from_metadata_backfills_legacy_devdocs_name() -> None:
     assert source_type == "repo_markdown"
     assert source_url is None
     assert canonical_url is None
+
+
+def test_infer_source_type_backfills_legacy_devdocs_type() -> None:
+    assert infer_source_type("docs/apis/subsystems/admin/index.md", None, None) == "repo_markdown"
+    assert infer_source_type("design_system/styles/colours.site", None, None) == "scraped_web"
 
 
 def test_result_source_metadata_preserves_scraped_source_fields() -> None:

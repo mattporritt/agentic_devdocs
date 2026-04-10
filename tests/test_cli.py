@@ -216,6 +216,7 @@ def test_cli_query_json_contract_for_devdocs_query(tmp_path: Path) -> None:
     payload = RuntimeContractEnvelope.model_validate_json(result.stdout)
     assert payload.tool == "agentic_docs"
     assert payload.version == "v1"
+    assert list(raw.keys()) == ["tool", "version", "query", "normalized_query", "intent", "results"]
     assert raw["results"][0]["id"] == payload.results[0].id
     assert isinstance(raw["results"][0]["content"]["sections"], list)
     assert isinstance(raw["results"][0]["content"]["file_anchors"], list)
@@ -224,6 +225,7 @@ def test_cli_query_json_contract_for_devdocs_query(tmp_path: Path) -> None:
     assert payload.intent.task_intent == "file_location"
     assert payload.results[0].confidence == "high"
     assert payload.results[0].source.name == "devdocs_repo"
+    assert payload.results[0].source.type == "repo_markdown"
     assert payload.results[0].source.path == "apis/subsystems/admin/index.md"
     assert payload.results[0].content.sections[0].id
     assert payload.results[0].content.sections[0].document_title == "Admin settings"

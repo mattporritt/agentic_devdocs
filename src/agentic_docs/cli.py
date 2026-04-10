@@ -195,7 +195,7 @@ def query(
             include_next=include_next,
             bundle_max_tokens=bundle_max_tokens,
         )
-        typer.echo(json.dumps(build_runtime_contract(query_text, bundles, top_k).model_dump(), indent=2, sort_keys=True))
+        typer.echo(json.dumps(build_runtime_contract(query_text, bundles, top_k).model_dump(), indent=2))
         return
     if context_bundle:
         bundles = build_context_bundles(
