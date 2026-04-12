@@ -423,6 +423,7 @@ Contract rules for `v1`:
 - `result.id` is a deterministic bundle identifier derived from source path and heading context. `content.sections[].id` reuses the stable chunk id from storage.
 - `confidence` is a coarse runtime label only: `high` for rank 1, `medium` for ranks 2-3, and `low` otherwise.
 - A machine-readable schema for this contract lives at [schemas/runtime_contract_v1.json](/Users/mattp/projects/agentic_devdocs/schemas/runtime_contract_v1.json).
+- The schema file is the source of truth for required fields and null-versus-empty conventions; README examples should match it, not redefine it.
 - README examples and the dedicated reference examples are intended to match live `--json-contract` output closely enough to serve as cross-tool alignment targets.
 
 Example `v1` response shape:

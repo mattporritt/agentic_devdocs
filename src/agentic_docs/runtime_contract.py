@@ -125,6 +125,7 @@ def build_runtime_contract(query_text: str, bundles: list, top_k: int) -> Runtim
                     bundle.section_title or "",
                     " > ".join(bundle.heading_path),
                 ),
+                type="knowledge_bundle",
                 rank=bundle.rank,
                 confidence=_runtime_confidence(bundle),
                 source=RuntimeContractSource(
@@ -156,6 +157,8 @@ def build_runtime_contract(query_text: str, bundles: list, top_k: int) -> Runtim
             )
         )
     return RuntimeContractEnvelope(
+        tool="agentic_docs",
+        version="v1",
         query=query_text,
         normalized_query=profile.normalized_query,
         intent=RuntimeContractIntent(

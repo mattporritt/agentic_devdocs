@@ -31,7 +31,10 @@
         }
       },
       "required": [
-        "summary"
+        "summary",
+        "sections",
+        "file_anchors",
+        "key_points"
       ],
       "title": "RuntimeContractContent",
       "type": "object"
@@ -49,7 +52,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Ranking Explanation"
         },
         "selection_strategy": {
@@ -65,7 +67,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Support Reason"
         },
         "token_count": {
@@ -74,6 +75,8 @@
         }
       },
       "required": [
+        "ranking_explanation",
+        "support_reason",
         "token_count",
         "selection_strategy"
       ],
@@ -102,7 +105,8 @@
       },
       "required": [
         "query_intent",
-        "task_intent"
+        "task_intent",
+        "concept_families"
       ],
       "title": "RuntimeContractIntent",
       "type": "object"
@@ -138,13 +142,14 @@
           "$ref": "#/$defs/RuntimeContractSource"
         },
         "type": {
-          "default": "knowledge_bundle",
+          "const": "knowledge_bundle",
           "title": "Type",
           "type": "string"
         }
       },
       "required": [
         "id",
+        "type",
         "rank",
         "confidence",
         "source",
@@ -167,7 +172,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Canonical Url"
         },
         "content": {
@@ -202,7 +206,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Section Title"
         },
         "source_path": {
@@ -218,7 +221,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Source Url"
         },
         "token_count": {
@@ -231,6 +233,10 @@
         "role",
         "document_title",
         "source_path",
+        "source_url",
+        "canonical_url",
+        "section_title",
+        "heading_path",
         "token_count",
         "content"
       ],
@@ -250,7 +256,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Canonical Url"
         },
         "document_title": {
@@ -273,7 +278,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Name"
         },
         "path": {
@@ -289,7 +293,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Section Title"
         },
         "type": {
@@ -301,7 +304,6 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Type"
         },
         "url": {
@@ -313,13 +315,18 @@
               "type": "null"
             }
           ],
-          "default": null,
           "title": "Url"
         }
       },
       "required": [
+        "name",
+        "type",
+        "url",
+        "canonical_url",
         "path",
-        "document_title"
+        "document_title",
+        "section_title",
+        "heading_path"
       ],
       "title": "RuntimeContractSource",
       "type": "object"
@@ -347,20 +354,23 @@
       "type": "array"
     },
     "tool": {
-      "default": "agentic_docs",
+      "const": "agentic_docs",
       "title": "Tool",
       "type": "string"
     },
     "version": {
-      "default": "v1",
+      "const": "v1",
       "title": "Version",
       "type": "string"
     }
   },
   "required": [
+    "tool",
+    "version",
     "query",
     "normalized_query",
-    "intent"
+    "intent",
+    "results"
   ],
   "title": "RuntimeContractEnvelope",
   "type": "object"

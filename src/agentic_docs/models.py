@@ -142,7 +142,7 @@ class RuntimeContractIntent(BaseModel):
 
     query_intent: str
     task_intent: str
-    concept_families: list[str] = Field(default_factory=list)
+    concept_families: list[str]
 
 
 class RuntimeContractSource(BaseModel):
@@ -150,14 +150,14 @@ class RuntimeContractSource(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    name: str | None = None
-    type: str | None = None
-    url: str | None = None
-    canonical_url: str | None = None
+    name: str | None
+    type: str | None
+    url: str | None
+    canonical_url: str | None
     path: str
     document_title: str
-    section_title: str | None = None
-    heading_path: list[str] = Field(default_factory=list)
+    section_title: str | None
+    heading_path: list[str]
 
 
 class RuntimeContractSection(BaseModel):
@@ -169,10 +169,10 @@ class RuntimeContractSection(BaseModel):
     role: str
     document_title: str
     source_path: str
-    source_url: str | None = None
-    canonical_url: str | None = None
-    section_title: str | None = None
-    heading_path: list[str] = Field(default_factory=list)
+    source_url: str | None
+    canonical_url: str | None
+    section_title: str | None
+    heading_path: list[str]
     token_count: int
     content: str
 
@@ -183,9 +183,9 @@ class RuntimeContractContent(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     summary: str
-    sections: list[RuntimeContractSection] = Field(default_factory=list)
-    file_anchors: list[str] = Field(default_factory=list)
-    key_points: list[str] = Field(default_factory=list)
+    sections: list[RuntimeContractSection]
+    file_anchors: list[str]
+    key_points: list[str]
 
 
 class RuntimeContractDiagnostics(BaseModel):
@@ -193,8 +193,8 @@ class RuntimeContractDiagnostics(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    ranking_explanation: str | None = None
-    support_reason: str | None = None
+    ranking_explanation: str | None
+    support_reason: str | None
     token_count: int
     selection_strategy: str
 
@@ -205,7 +205,7 @@ class RuntimeContractResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     id: str
-    type: str = "knowledge_bundle"
+    type: Literal["knowledge_bundle"]
     rank: int
     confidence: Literal["high", "medium", "low"]
     source: RuntimeContractSource
@@ -218,12 +218,12 @@ class RuntimeContractEnvelope(BaseModel):
 
     model_config = ConfigDict(extra="forbid")
 
-    tool: str = "agentic_docs"
-    version: str = "v1"
+    tool: Literal["agentic_docs"]
+    version: Literal["v1"]
     query: str
     normalized_query: str
     intent: RuntimeContractIntent
-    results: list[RuntimeContractResult] = Field(default_factory=list)
+    results: list[RuntimeContractResult]
 
 
 class EvalCase(BaseModel):
