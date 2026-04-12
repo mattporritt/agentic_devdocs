@@ -9,6 +9,7 @@ from agentic_docs.models import (
     RuntimeContractResult,
     RuntimeContractSection,
     RuntimeContractSource,
+    SharedRuntimeContractEnvelope,
 )
 
 
@@ -110,3 +111,24 @@ def test_runtime_contract_schema_requires_documented_fields() -> None:
         "section_title",
         "heading_path",
     ]
+
+
+def test_shared_runtime_contract_schema_requires_outer_fields_only() -> None:
+    schema = SharedRuntimeContractEnvelope.model_json_schema()
+
+    assert schema["required"] == ["tool", "version", "query", "normalized_query", "intent", "results"]
+    result_required = schema["$defs"]["SharedRuntimeContractResult"]["required"]
+    assert result_required == ["id", "type", "rank", "confidence", "source", "content", "diagnostics"]
+    source_required = schema["$defs"]["RuntimeContractSource"]["required"]
+    assert source_required == [
+        "name",
+        "type",
+        "url",
+        "canonical_url",
+        "path",
+        "document_title",
+        "section_title",
+        "heading_path",
+    ]
+    content_schema = schema["$defs"]["SharedRuntimeContractContent"]
+    assert content_schema["type"] == "object"

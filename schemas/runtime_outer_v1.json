@@ -1,44 +1,5 @@
 {
   "$defs": {
-    "RuntimeContractContent": {
-      "additionalProperties": false,
-      "description": "Normalized content block for the stable runtime contract.",
-      "properties": {
-        "summary": {
-          "title": "Summary",
-          "type": "string"
-        },
-        "sections": {
-          "items": {
-            "$ref": "#/$defs/RuntimeContractSection"
-          },
-          "title": "Sections",
-          "type": "array"
-        },
-        "file_anchors": {
-          "items": {
-            "type": "string"
-          },
-          "title": "File Anchors",
-          "type": "array"
-        },
-        "key_points": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Key Points",
-          "type": "array"
-        }
-      },
-      "required": [
-        "summary",
-        "sections",
-        "file_anchors",
-        "key_points"
-      ],
-      "title": "RuntimeContractContent",
-      "type": "object"
-    },
     "RuntimeContractDiagnostics": {
       "additionalProperties": false,
       "description": "Minimal runtime diagnostics for debugging orchestration issues.",
@@ -109,138 +70,6 @@
         "concept_families"
       ],
       "title": "RuntimeContractIntent",
-      "type": "object"
-    },
-    "RuntimeContractResult": {
-      "additionalProperties": false,
-      "description": "A single runtime-facing knowledge bundle result.",
-      "properties": {
-        "id": {
-          "title": "Id",
-          "type": "string"
-        },
-        "type": {
-          "const": "knowledge_bundle",
-          "title": "Type",
-          "type": "string"
-        },
-        "rank": {
-          "title": "Rank",
-          "type": "integer"
-        },
-        "confidence": {
-          "enum": [
-            "high",
-            "medium",
-            "low"
-          ],
-          "title": "Confidence",
-          "type": "string"
-        },
-        "source": {
-          "$ref": "#/$defs/RuntimeContractSource"
-        },
-        "content": {
-          "$ref": "#/$defs/RuntimeContractContent"
-        },
-        "diagnostics": {
-          "$ref": "#/$defs/RuntimeContractDiagnostics"
-        }
-      },
-      "required": [
-        "id",
-        "type",
-        "rank",
-        "confidence",
-        "source",
-        "content",
-        "diagnostics"
-      ],
-      "title": "RuntimeContractResult",
-      "type": "object"
-    },
-    "RuntimeContractSection": {
-      "additionalProperties": false,
-      "description": "A compact structured section included in a runtime knowledge bundle.",
-      "properties": {
-        "id": {
-          "title": "Id",
-          "type": "string"
-        },
-        "role": {
-          "title": "Role",
-          "type": "string"
-        },
-        "document_title": {
-          "title": "Document Title",
-          "type": "string"
-        },
-        "source_path": {
-          "title": "Source Path",
-          "type": "string"
-        },
-        "source_url": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Source Url"
-        },
-        "canonical_url": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Canonical Url"
-        },
-        "section_title": {
-          "anyOf": [
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "title": "Section Title"
-        },
-        "heading_path": {
-          "items": {
-            "type": "string"
-          },
-          "title": "Heading Path",
-          "type": "array"
-        },
-        "token_count": {
-          "title": "Token Count",
-          "type": "integer"
-        },
-        "content": {
-          "title": "Content",
-          "type": "string"
-        }
-      },
-      "required": [
-        "id",
-        "role",
-        "document_title",
-        "source_path",
-        "source_url",
-        "canonical_url",
-        "section_title",
-        "heading_path",
-        "token_count",
-        "content"
-      ],
-      "title": "RuntimeContractSection",
       "type": "object"
     },
     "RuntimeContractSource": {
@@ -330,18 +159,70 @@
       ],
       "title": "RuntimeContractSource",
       "type": "object"
+    },
+    "SharedRuntimeContractContent": {
+      "additionalProperties": true,
+      "description": "Tool-specific runtime payload carried inside the shared outer envelope.\n\nThe shared cross-tool contract intentionally does not constrain the inner\nshape beyond \"must be an object\". `agentic_docs` layers its richer content\nmodel on top of this shared shell.",
+      "properties": {},
+      "title": "SharedRuntimeContractContent",
+      "type": "object"
+    },
+    "SharedRuntimeContractResult": {
+      "additionalProperties": false,
+      "description": "Shared cross-tool runtime result wrapper.\n\nThis preserves the common provenance and diagnostics shape while allowing\neach tool to define its own `content` payload.",
+      "properties": {
+        "id": {
+          "title": "Id",
+          "type": "string"
+        },
+        "type": {
+          "title": "Type",
+          "type": "string"
+        },
+        "rank": {
+          "title": "Rank",
+          "type": "integer"
+        },
+        "confidence": {
+          "enum": [
+            "high",
+            "medium",
+            "low"
+          ],
+          "title": "Confidence",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/RuntimeContractSource"
+        },
+        "content": {
+          "$ref": "#/$defs/SharedRuntimeContractContent"
+        },
+        "diagnostics": {
+          "$ref": "#/$defs/RuntimeContractDiagnostics"
+        }
+      },
+      "required": [
+        "id",
+        "type",
+        "rank",
+        "confidence",
+        "source",
+        "content",
+        "diagnostics"
+      ],
+      "title": "SharedRuntimeContractResult",
+      "type": "object"
     }
   },
   "additionalProperties": false,
-  "description": "Stable JSON contract for external runtime consumers.",
+  "description": "Canonical shared outer envelope for the Moodle agentic tool family.",
   "properties": {
     "tool": {
-      "const": "agentic_docs",
       "title": "Tool",
       "type": "string"
     },
     "version": {
-      "const": "v1",
       "title": "Version",
       "type": "string"
     },
@@ -358,7 +239,7 @@
     },
     "results": {
       "items": {
-        "$ref": "#/$defs/RuntimeContractResult"
+        "$ref": "#/$defs/SharedRuntimeContractResult"
       },
       "title": "Results",
       "type": "array"
@@ -372,6 +253,6 @@
     "intent",
     "results"
   ],
-  "title": "RuntimeContractEnvelope",
+  "title": "SharedRuntimeContractEnvelope",
   "type": "object"
 }

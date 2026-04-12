@@ -226,6 +226,48 @@ class RuntimeContractEnvelope(BaseModel):
     results: list[RuntimeContractResult]
 
 
+class SharedRuntimeContractContent(BaseModel):
+    """Tool-specific runtime payload carried inside the shared outer envelope.
+
+    The shared cross-tool contract intentionally does not constrain the inner
+    shape beyond "must be an object". `agentic_docs` layers its richer content
+    model on top of this shared shell.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+
+class SharedRuntimeContractResult(BaseModel):
+    """Shared cross-tool runtime result wrapper.
+
+    This preserves the common provenance and diagnostics shape while allowing
+    each tool to define its own `content` payload.
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    id: str
+    type: str
+    rank: int
+    confidence: Literal["high", "medium", "low"]
+    source: RuntimeContractSource
+    content: SharedRuntimeContractContent
+    diagnostics: RuntimeContractDiagnostics
+
+
+class SharedRuntimeContractEnvelope(BaseModel):
+    """Canonical shared outer envelope for the Moodle agentic tool family."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    tool: str
+    version: str
+    query: str
+    normalized_query: str
+    intent: RuntimeContractIntent
+    results: list[SharedRuntimeContractResult]
+
+
 class EvalCase(BaseModel):
     """A single retrieval evaluation case."""
 

@@ -2,6 +2,11 @@
 
 `agentic-docs` is the reference implementation for the shared runtime-facing contract used by the related tooling family.
 
+Canonical schema artifacts:
+
+- `schemas/runtime_outer_v1.json` is the shared cross-tool source of truth for the outer envelope, result wrapper, provenance fields, and diagnostics fields.
+- `schemas/runtime_contract_v1.json` is the stricter `agentic_docs` specialization that adds the current devdocs-specific `content` structure.
+
 The reference outer envelope is:
 
 ```json
@@ -24,6 +29,7 @@ Cross-tool alignment rule:
 - keep the outer envelope aligned across tools
 - keep `source`, `diagnostics`, and top-level `intent` conventions aligned
 - allow `results[].content` to vary by tool where the inner payload genuinely differs
+- prefer vendoring the shared outer schema unless another repo is intentionally matching the full `agentic_docs` payload
 
 ## Devdocs Example
 

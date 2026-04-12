@@ -74,11 +74,11 @@ def _validate_schema_node(schema: dict, node_schema: dict, value, path: str = "$
     raise AssertionError(f"Unsupported schema fragment at {path}: {node_schema!r}")
 
 
-def _load_contract_schema() -> dict:
-    return json.loads(Path("schemas/runtime_contract_v1.json").read_text(encoding="utf-8"))
+def _load_schema(name: str) -> dict:
+    return json.loads(Path(name).read_text(encoding="utf-8"))
 
 
-def test_runtime_contract_live_outputs_validate_against_schema(tmp_path: Path) -> None:
+def test_runtime_contract_live_outputs_validate_against_shared_and_devdocs_schemas(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     (docs_dir / "apis" / "subsystems" / "admin").mkdir(parents=True)
     (docs_dir / "apis" / "subsystems" / "output").mkdir(parents=True)
@@ -113,7 +113,8 @@ def test_runtime_contract_live_outputs_validate_against_schema(tmp_path: Path) -
     ingest_result = runner.invoke(app, ["ingest", "--source", str(docs_dir), "--db-path", str(db_path), "--json"])
     assert ingest_result.exit_code == 0
 
-    schema = _load_contract_schema()
+    outer_schema = _load_schema("schemas/runtime_outer_v1.json")
+    devdocs_schema = _load_schema("schemas/runtime_contract_v1.json")
     queries = [
         "Where do Moodle plugin admin settings go?",
         "What are semantic colour tokens?",
@@ -124,4 +125,5 @@ def test_runtime_contract_live_outputs_validate_against_schema(tmp_path: Path) -
         result = runner.invoke(app, ["query", query, "--db-path", str(db_path), "--json-contract"])
         assert result.exit_code == 0
         payload = json.loads(result.stdout)
-        _validate_schema_node(schema, schema, payload)
+        _validate_schema_node(outer_schema, outer_schema, payload)
+        _validate_schema_node(devdocs_schema, devdocs_schema, payload)

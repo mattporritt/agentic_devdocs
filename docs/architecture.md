@@ -280,7 +280,8 @@ Important invariants for `v1`:
 - result and section ids are deterministic
 - provenance shape stays consistent across sources
 
-The checked-in schema at `schemas/runtime_contract_v1.json` should match the live Pydantic model.
+The checked-in schema at `schemas/runtime_outer_v1.json` is the canonical shared outer contract for the tool family.
+The checked-in schema at `schemas/runtime_contract_v1.json` is the stricter `agentic_docs` specialization and should match the live Pydantic model for this repository.
 
 ## Known Conservative Choices
 

@@ -5,7 +5,13 @@ import pytest
 from typer.testing import CliRunner
 
 from agentic_docs.cli import _validation_summary_status, _validation_worktree_payload, app
-from agentic_docs.models import BundleGradeStats, EvalReport, EvalWindowStats, RuntimeContractEnvelope
+from agentic_docs.models import (
+    BundleGradeStats,
+    EvalReport,
+    EvalWindowStats,
+    RuntimeContractEnvelope,
+    SharedRuntimeContractEnvelope,
+)
 
 
 runner = CliRunner()
@@ -353,6 +359,12 @@ def test_runtime_contract_schema_artifact_matches_model() -> None:
     schema_path = Path("schemas/runtime_contract_v1.json")
     schema = json.loads(schema_path.read_text(encoding="utf-8"))
     assert schema == RuntimeContractEnvelope.model_json_schema()
+
+
+def test_shared_runtime_contract_schema_artifact_matches_model() -> None:
+    schema_path = Path("schemas/runtime_outer_v1.json")
+    schema = json.loads(schema_path.read_text(encoding="utf-8"))
+    assert schema == SharedRuntimeContractEnvelope.model_json_schema()
 
 
 def test_cli_eval_text_and_json_are_consistent(tmp_path: Path) -> None:

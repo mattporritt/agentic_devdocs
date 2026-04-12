@@ -402,6 +402,11 @@ Alignment guidance:
 
 The current reference examples live in [docs/contract-reference.md](/Users/mattp/projects/agentic_devdocs/docs/contract-reference.md).
 
+Schema artifacts:
+
+- [schemas/runtime_outer_v1.json](/Users/mattp/projects/agentic_devdocs/schemas/runtime_outer_v1.json) is the canonical shared outer schema for the tool family. Other repos should vendor or align to this artifact for the common envelope, result wrapper, provenance, and diagnostics shape.
+- [schemas/runtime_contract_v1.json](/Users/mattp/projects/agentic_devdocs/schemas/runtime_contract_v1.json) is the stricter `agentic_docs` specialization layered on top of that shared shell. It keeps the same outer structure but constrains the devdocs-specific `results[].content` payload.
+
 `--json-contract` is the runtime-facing CLI mode for orchestration systems. It returns only a stable JSON envelope with:
 
 - `tool` and `version` for contract identification
@@ -422,8 +427,10 @@ Contract rules for `v1`:
 - `content.sections` is the main structured payload. Each entry always includes `id`, `role`, `document_title`, `source_path`, `heading_path`, `token_count`, and `content`.
 - `result.id` is a deterministic bundle identifier derived from source path and heading context. `content.sections[].id` reuses the stable chunk id from storage.
 - `confidence` is a coarse runtime label only: `high` for rank 1, `medium` for ranks 2-3, and `low` otherwise.
-- A machine-readable schema for this contract lives at [schemas/runtime_contract_v1.json](/Users/mattp/projects/agentic_devdocs/schemas/runtime_contract_v1.json).
-- The schema file is the source of truth for required fields and null-versus-empty conventions; README examples should match it, not redefine it.
+- The shared outer source of truth lives at [schemas/runtime_outer_v1.json](/Users/mattp/projects/agentic_devdocs/schemas/runtime_outer_v1.json).
+- The full `agentic_docs` contract source of truth lives at [schemas/runtime_contract_v1.json](/Users/mattp/projects/agentic_devdocs/schemas/runtime_contract_v1.json).
+- Other tools should depend on the shared outer schema unless they intentionally implement the same `agentic_docs` content payload.
+- The schema files are the source of truth for required fields and null-versus-empty conventions; README examples should match them, not redefine them.
 - README examples and the dedicated reference examples are intended to match live `--json-contract` output closely enough to serve as cross-tool alignment targets.
 
 Example `v1` response shape:
