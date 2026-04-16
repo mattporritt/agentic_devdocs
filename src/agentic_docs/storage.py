@@ -1,3 +1,8 @@
+# Copyright (c) Moodle Pty Ltd. All rights reserved.
+# Licensed under the Moodle Community License v1.3.
+# See LICENSE.md in the repository root for full terms.
+# Commercial use requires a separate written agreement with Moodle.
+
 """SQLite persistence, inspection, and FTS5 retrieval support.
 
 The storage layer is intentionally explicit: documents, sections, chunks, and the FTS

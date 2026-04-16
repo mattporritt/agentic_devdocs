@@ -1,3 +1,8 @@
+# Copyright (c) Moodle Pty Ltd. All rights reserved.
+# Licensed under the Moodle Community License v1.3.
+# See LICENSE.md in the repository root for full terms.
+# Commercial use requires a separate written agreement with Moodle.
+
 from agentic_docs.models import QueryResult
 from agentic_docs.provenance import infer_source_name, infer_source_type, result_source_metadata, source_fields_from_metadata
 
