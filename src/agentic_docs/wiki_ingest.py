@@ -298,6 +298,7 @@ def ingest_wiki_source(
     max_tokens: int,
     overlap_tokens: int,
     max_pages: int | None = None,
+    append: bool = False,
 ) -> dict[str, int | str]:
     """Ingest the Moodle user documentation wiki into the shared SQLite schema."""
 
@@ -305,7 +306,8 @@ def ingest_wiki_source(
     ctx, documents = fetch_wiki_documents(base_url=base_url, max_pages=max_pages)
     store = SQLiteStore(db_path)
     store.initialize()
-    store.reindex()
+    if not append:
+        store.reindex()
 
     document_count = 0
     section_count = 0

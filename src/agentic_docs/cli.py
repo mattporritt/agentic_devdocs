@@ -131,6 +131,7 @@ def ingest(
     tokenizer: Annotated[str, typer.Option(help="Tokenizer adapter to use.")] = "openai",
     max_tokens: Annotated[int, typer.Option(help="Maximum tokens per chunk.")] = 400,
     overlap_tokens: Annotated[int, typer.Option(help="Overlap tokens between adjacent chunks.")] = 60,
+    append: Annotated[bool, typer.Option("--append", help="Add to an existing database without wiping it first.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Parse markdown docs, chunk them, and index them into SQLite."""
@@ -148,6 +149,7 @@ def ingest(
         tokenizer_name=config.tokenizer,
         max_tokens=config.max_tokens,
         overlap_tokens=config.overlap_tokens,
+        append=append,
     )
     _emit(result, json_output)
 
@@ -160,6 +162,7 @@ def ingest_site(
     max_tokens: Annotated[int, typer.Option(help="Maximum tokens per chunk.")] = 400,
     overlap_tokens: Annotated[int, typer.Option(help="Overlap tokens between adjacent chunks.")] = 60,
     max_pages: Annotated[int | None, typer.Option(help="Optional limit for the number of in-scope pages to ingest.")] = None,
+    append: Annotated[bool, typer.Option("--append", help="Add to an existing database without wiping it first.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Scrape a bounded website source and index it into SQLite."""
@@ -171,6 +174,7 @@ def ingest_site(
         max_tokens=max_tokens,
         overlap_tokens=overlap_tokens,
         max_pages=max_pages,
+        append=append,
     )
     _emit(result, json_output)
 
@@ -481,6 +485,7 @@ def ingest_userdocs(
     max_tokens: Annotated[int, typer.Option(help="Maximum tokens per chunk.")] = 400,
     overlap_tokens: Annotated[int, typer.Option(help="Overlap tokens between adjacent chunks.")] = 60,
     max_pages: Annotated[int | None, typer.Option(help="Optional limit on pages to ingest.")] = None,
+    append: Annotated[bool, typer.Option("--append", help="Add to an existing database without wiping it first.")] = False,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Scrape the Moodle user documentation wiki and index it into SQLite."""
@@ -492,6 +497,7 @@ def ingest_userdocs(
         max_tokens=max_tokens,
         overlap_tokens=overlap_tokens,
         max_pages=max_pages,
+        append=append,
     )
     _emit(result, json_output)
 

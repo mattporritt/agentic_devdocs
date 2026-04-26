@@ -22,6 +22,7 @@ def ingest_source(
     tokenizer_name: str,
     max_tokens: int,
     overlap_tokens: int,
+    append: bool = False,
 ) -> dict[str, int | str]:
     """Ingest a markdown corpus into SQLite and return summary counts."""
 
@@ -30,7 +31,8 @@ def ingest_source(
     files = discover_markdown_files(source)
     store = SQLiteStore(db_path)
     store.initialize()
-    store.reindex()
+    if not append:
+        store.reindex()
 
     document_count = 0
     section_count = 0
