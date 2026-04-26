@@ -11,6 +11,16 @@ def test_infer_source_name_prefers_design_system_path() -> None:
     assert infer_source_name("design_system/styles/colours.site", "devdocs_repo", "repo_markdown") == "design_system"
 
 
+def test_infer_source_name_prefers_user_docs_path() -> None:
+    assert infer_source_name("user_docs/forum.wiki", None, None) == "user_docs"
+    assert infer_source_name("user_docs/quiz-activity.wiki", "other", "repo_markdown") == "user_docs"
+
+
+def test_infer_source_type_backfills_user_docs_as_scraped_web() -> None:
+    assert infer_source_type("user_docs/forum.wiki", None, None) == "scraped_web"
+    assert infer_source_type("user_docs/gradebook.wiki", None, "scraped_web") == "scraped_web"
+
+
 def test_source_fields_from_metadata_backfills_legacy_devdocs_name() -> None:
     source_name, source_type, source_url, canonical_url = source_fields_from_metadata(
         {"source_type": "repo_markdown"},

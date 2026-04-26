@@ -11,11 +11,13 @@ from agentic_docs.models import QueryResult
 
 
 def infer_source_name(source_file_path: str, source_name: str | None, source_type: str | None) -> str | None:
-    """Return a stable source name across devdocs, design-system, and legacy rows."""
+    """Return a stable source name across devdocs, design-system, user-docs, and legacy rows."""
 
     normalized_path = source_file_path.replace("\\", "/").lower()
     if normalized_path.startswith("design_system/") or "/design_system/" in normalized_path:
         return "design_system"
+    if normalized_path.startswith("user_docs/") or "/user_docs/" in normalized_path:
+        return "user_docs"
     if source_name:
         return source_name
     if source_type == "repo_markdown" or source_type is None:
@@ -28,6 +30,8 @@ def infer_source_type(source_file_path: str, source_name: str | None, source_typ
 
     normalized_path = source_file_path.replace("\\", "/").lower()
     if normalized_path.startswith("design_system/") or "/design_system/" in normalized_path:
+        return source_type or "scraped_web"
+    if normalized_path.startswith("user_docs/") or "/user_docs/" in normalized_path:
         return source_type or "scraped_web"
     normalized_name = infer_source_name(source_file_path, source_name, source_type)
     if normalized_name == "devdocs_repo":

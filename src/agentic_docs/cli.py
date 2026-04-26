@@ -22,6 +22,8 @@ from agentic_docs.provenance import source_fields_from_metadata
 from agentic_docs.query_service import build_context_bundles, query_chunks
 from agentic_docs.runtime_contract import build_runtime_contract
 from agentic_docs.site_ingest import ingest_site_source
+from agentic_docs.wiki_ingest import DEFAULT_BASE_URL as WIKI_DEFAULT_BASE_URL
+from agentic_docs.wiki_ingest import ingest_wiki_source
 from agentic_docs.storage import SQLiteStore
 
 app = typer.Typer(help="Ingest markdown docs into agent-friendly retrieval artifacts.")
@@ -441,6 +443,90 @@ def verify_site(
         "design tokens for developers",
         "semantic colour tokens",
         "icon library",
+    ]
+    smoke_results = {
+        query_text: [result.model_dump() for result in query_chunks(db_path=db_path, query_text=query_text, top_k=3)]
+        for query_text in smoke_queries
+    }
+    eval_report = (
+        run_eval(
+            db_path=db_path,
+            eval_file=eval_file,
+            with_bundles=with_bundles,
+            bundle_max_tokens=bundle_max_tokens,
+            baseline=baseline,
+        )
+        if eval_file is not None
+        else None
+    )
+    validation_status = _validation_summary_status(eval_report)
+    payload = {
+        "base_url": base_url,
+        "db_path": str(db_path),
+        "working_tree": working_tree,
+        "ingest": ingest_result,
+        "stats": SQLiteStore(db_path).detailed_stats(limit=5),
+        "smoke_queries": smoke_results,
+        "eval": eval_report.model_dump() if eval_report is not None else None,
+        "validation_status": validation_status,
+    }
+    _emit(payload, json_output)
+
+
+@app.command("ingest-userdocs")
+def ingest_userdocs(
+    base_url: Annotated[str, typer.Option(help="Moodle user docs wiki base URL.")] = WIKI_DEFAULT_BASE_URL,
+    db_path: Annotated[Path, typer.Option(help="SQLite database path.")] = Path("./_smoke_test/user-docs.db"),
+    tokenizer: Annotated[str, typer.Option(help="Tokenizer adapter to use.")] = "openai",
+    max_tokens: Annotated[int, typer.Option(help="Maximum tokens per chunk.")] = 400,
+    overlap_tokens: Annotated[int, typer.Option(help="Overlap tokens between adjacent chunks.")] = 60,
+    max_pages: Annotated[int | None, typer.Option(help="Optional limit on pages to ingest.")] = None,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
+) -> None:
+    """Scrape the Moodle user documentation wiki and index it into SQLite."""
+
+    result = ingest_wiki_source(
+        base_url=base_url,
+        db_path=db_path,
+        tokenizer_name=tokenizer,
+        max_tokens=max_tokens,
+        overlap_tokens=overlap_tokens,
+        max_pages=max_pages,
+    )
+    _emit(result, json_output)
+
+
+@app.command("verify-userdocs")
+def verify_userdocs(
+    base_url: Annotated[str, typer.Option(help="Moodle user docs wiki base URL.")] = WIKI_DEFAULT_BASE_URL,
+    db_path: Annotated[Path, typer.Option(help="SQLite database path.")] = Path("./_smoke_test/user-docs.db"),
+    eval_file: Annotated[Path | None, typer.Option(help="Optional eval YAML/JSON to run after ingest.")] = None,
+    tokenizer: Annotated[str, typer.Option(help="Tokenizer adapter to use.")] = "openai",
+    max_tokens: Annotated[int, typer.Option(help="Maximum tokens per chunk.")] = 400,
+    overlap_tokens: Annotated[int, typer.Option(help="Overlap tokens between adjacent chunks.")] = 60,
+    max_pages: Annotated[int | None, typer.Option(help="Optional limit on pages to ingest.")] = None,
+    with_bundles: Annotated[bool, typer.Option(help="Evaluate bundle usefulness as part of the validation payload.")] = True,
+    bundle_max_tokens: Annotated[int, typer.Option(help="Maximum tokens for evaluated context bundles in validation.")] = 450,
+    baseline: Annotated[Path | None, typer.Option(help="Optional prior verify artifact to compare against.")] = None,
+    allow_dirty: Annotated[bool, typer.Option(help="Allow validation to run from a dirty git working tree.")] = False,
+    json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
+) -> None:
+    """Run a repeatable ingest, stats, and smoke-query workflow for Moodle user docs."""
+
+    workspace_path = Path(os.getcwd())
+    working_tree = _validation_worktree_payload(workspace_path, allow_dirty=allow_dirty)
+    ingest_result = ingest_wiki_source(
+        base_url=base_url,
+        db_path=db_path,
+        tokenizer_name=tokenizer,
+        max_tokens=max_tokens,
+        overlap_tokens=overlap_tokens,
+        max_pages=max_pages,
+    )
+    smoke_queries = [
+        "adding a forum activity to a course",
+        "gradebook settings and grade categories",
+        "quiz question types",
     ]
     smoke_results = {
         query_text: [result.model_dump() for result in query_chunks(db_path=db_path, query_text=query_text, top_k=3)]
