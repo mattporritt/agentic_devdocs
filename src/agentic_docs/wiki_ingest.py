@@ -78,13 +78,26 @@ def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
 
     print("Acquiring Cloudflare clearance via headless browser...", flush=True)
     with sync_playwright() as p:
-        browser = p.chromium.launch(headless=True)
-        context = browser.new_context()
+        browser = p.chromium.launch(
+            headless=True,
+            # Suppress the automation flag that Cloudflare fingerprints.
+            args=["--disable-blink-features=AutomationControlled"],
+        )
+        context = browser.new_context(
+            viewport={"width": 1280, "height": 720},
+            locale="en-US",
+        )
         page = context.new_page()
-        page.goto(url, wait_until="networkidle", timeout=30_000)
 
-        # Cloudflare challenge page title is "Just a moment..." — wait for it to resolve.
-        for _ in range(15):
+        # "domcontentloaded" returns as soon as the initial HTML is parsed.
+        # Cloudflare's JS challenge makes continuous network requests while
+        # computing, so "networkidle" (which needs 500 ms of silence) times
+        # out before the challenge ever resolves. We instead return early and
+        # poll the page title below to detect when the real page arrives.
+        page.goto(url, wait_until="domcontentloaded", timeout=60_000)
+
+        # Poll up to 30 s for the challenge to clear (title leaves "Just a moment...").
+        for _ in range(30):
             if "just a moment" not in (page.title() or "").lower():
                 break
             page.wait_for_timeout(1_000)
