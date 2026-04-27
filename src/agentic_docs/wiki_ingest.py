@@ -3,16 +3,32 @@
 # See LICENSE.md in the repository root for full terms.
 # Commercial use requires a separate written agreement with Moodle.
 
-"""Bounded MediaWiki ingestion for the Moodle user documentation wiki."""
+"""Bounded MediaWiki ingestion for the Moodle user documentation wiki.
+
+Cloudflare protection on docs.moodle.org requires a one-time browser-based
+challenge solve before scraping can proceed. This module uses Playwright to
+acquire a cf_clearance cookie (typically ~5 seconds), then hands off all
+subsequent MediaWiki API calls to plain urllib — so the browser is only
+active for the initial handshake, not per-page.
+
+Cookie refresh is handled transparently: on a mid-run 403 or when the
+session approaches its 30-minute expiry window, a new Playwright session
+is opened automatically and the run continues.
+
+Playwright must be installed separately:
+    pip install playwright
+    playwright install chromium
+"""
 
 from __future__ import annotations
 
 import json
 import re
 import ssl
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from typing import Any
+from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
 from urllib.request import Request, urlopen
 
@@ -26,6 +42,9 @@ DEFAULT_BASE_URL = "https://docs.moodle.org/502/en"
 SOURCE_NAME = "user_docs"
 SOURCE_TYPE = "scraped_web"
 
+# Refresh the Cloudflare session 5 minutes before cf_clearance's 30-min expiry.
+_CF_REFRESH_AFTER_SECONDS = 1500
+
 _HEADING_PATTERN = re.compile(r"^(={1,6})\s*(.+?)\s*\1\s*$", re.MULTILINE)
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 _REF_BLOCK = re.compile(r"<ref\b[^>]*>.*?</ref>", re.DOTALL | re.IGNORECASE)
@@ -35,6 +54,91 @@ _EXTERNAL_LINK_BARE = re.compile(r"\[https?://\S+\]")
 _FORMATTING = re.compile(r"'{2,3}")
 _EXCESS_BLANK_LINES = re.compile(r"\n{3,}")
 
+
+# ---------------------------------------------------------------------------
+# Cloudflare clearance
+# ---------------------------------------------------------------------------
+
+def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
+    """Launch a headless browser, solve the Cloudflare challenge, return (cookies, user_agent).
+
+    The browser is closed as soon as the challenge resolves — typically within
+    a few seconds. All subsequent HTTP calls use the returned credentials via
+    plain urllib, so the browser is not kept alive during the scrape.
+    """
+    try:
+        from playwright.sync_api import sync_playwright
+    except ImportError:
+        raise ImportError(
+            "Playwright is required to scrape Cloudflare-protected sites.\n"
+            "Install it with:\n"
+            "  pip install playwright\n"
+            "  playwright install chromium"
+        )
+
+    print("Acquiring Cloudflare clearance via headless browser...", flush=True)
+    with sync_playwright() as p:
+        browser = p.chromium.launch(headless=True)
+        context = browser.new_context()
+        page = context.new_page()
+        page.goto(url, wait_until="networkidle", timeout=30_000)
+
+        # Cloudflare challenge page title is "Just a moment..." — wait for it to resolve.
+        for _ in range(15):
+            if "just a moment" not in (page.title() or "").lower():
+                break
+            page.wait_for_timeout(1_000)
+
+        cookies = {c["name"]: c["value"] for c in context.cookies()}
+        user_agent: str = page.evaluate("() => navigator.userAgent")
+        browser.close()
+
+    if "cf_clearance" not in cookies:
+        raise RuntimeError(
+            "Cloudflare challenge did not resolve — cf_clearance cookie not present. "
+            "The site may require interactive login or have stricter bot detection."
+        )
+
+    print(f"Clearance acquired.", flush=True)
+    return cookies, user_agent
+
+
+@dataclass
+class WikiSession:
+    """Cloudflare clearance credentials for a single wiki scraping run.
+
+    Holds the cf_clearance cookie and the matching User-Agent string (Cloudflare
+    ties clearance to the UA it was issued for). Tracks acquisition time so
+    urllib callers can refresh proactively before expiry.
+    """
+
+    cookies: dict[str, str]
+    user_agent: str
+    base_url: str
+    acquired_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
+
+    @property
+    def cookie_header(self) -> str:
+        return "; ".join(f"{k}={v}" for k, v in self.cookies.items())
+
+    def needs_refresh(self) -> bool:
+        age = (datetime.now(tz=timezone.utc) - self.acquired_at).total_seconds()
+        return age > _CF_REFRESH_AFTER_SECONDS
+
+    def refresh(self) -> None:
+        print("Refreshing Cloudflare session...", flush=True)
+        self.cookies, self.user_agent = _acquire_cf_clearance(self.base_url)
+        self.acquired_at = datetime.now(tz=timezone.utc)
+
+    @classmethod
+    def acquire(cls, base_url: str) -> WikiSession:
+        cookies, user_agent = _acquire_cf_clearance(base_url)
+        return cls(cookies=cookies, user_agent=user_agent, base_url=base_url)
+
+
+# ---------------------------------------------------------------------------
+# URL helpers
+# ---------------------------------------------------------------------------
 
 @dataclass(slots=True)
 class WikiScrapeContext:
@@ -58,6 +162,10 @@ def page_source_path(page_title: str) -> str:
     return f"user_docs/{slug}.wiki"
 
 
+# ---------------------------------------------------------------------------
+# HTTP
+# ---------------------------------------------------------------------------
+
 def _ssl_context() -> ssl.SSLContext:
     try:
         import certifi  # type: ignore
@@ -66,16 +174,60 @@ def _ssl_context() -> ssl.SSLContext:
         return ssl.create_default_context()
 
 
-def _request_json(url: str, *, params: dict[str, Any] | None = None) -> Any:
+def _request_json(
+    url: str,
+    *,
+    params: dict[str, Any] | None = None,
+    session: WikiSession | None = None,
+) -> Any:
+    """Fetch a JSON endpoint, using Cloudflare credentials when a session is provided.
+
+    On a 403 response the session is refreshed once and the request retried.
+    A proactive refresh is also triggered when the session is within 5 minutes
+    of its expiry window.
+    """
     full_url = url
     if params:
         full_url = f"{url}?{urlencode(params)}"
-    req = Request(full_url, headers={"User-Agent": "agentic-docs/0.1"})
-    with urlopen(req, timeout=30, context=_ssl_context()) as resp:
-        return json.loads(resp.read().decode("utf-8"))
+
+    def _build_headers() -> dict[str, str]:
+        if session is None:
+            return {"User-Agent": "agentic-docs/0.1"}
+        headers: dict[str, str] = {"User-Agent": session.user_agent}
+        if session.cookies:
+            headers["Cookie"] = session.cookie_header
+        return headers
+
+    def _do_request() -> Any:
+        req = Request(full_url, headers=_build_headers())
+        with urlopen(req, timeout=30, context=_ssl_context()) as resp:
+            return json.loads(resp.read().decode("utf-8"))
+
+    if session is None:
+        return _do_request()
+
+    if session.needs_refresh():
+        session.refresh()
+
+    try:
+        return _do_request()
+    except HTTPError as exc:
+        if exc.code == 403:
+            session.refresh()
+            return _do_request()
+        raise
 
 
-def fetch_all_page_titles(api_url: str, max_pages: int | None = None) -> list[str]:
+# ---------------------------------------------------------------------------
+# MediaWiki API
+# ---------------------------------------------------------------------------
+
+def fetch_all_page_titles(
+    api_url: str,
+    max_pages: int | None = None,
+    *,
+    session: WikiSession | None = None,
+) -> list[str]:
     """Enumerate main-namespace page titles via the MediaWiki allpages API."""
 
     titles: list[str] = []
@@ -88,7 +240,7 @@ def fetch_all_page_titles(api_url: str, max_pages: int | None = None) -> list[st
         "format": "json",
     }
     while True:
-        data = _request_json(api_url, params=params)
+        data = _request_json(api_url, params=params, session=session)
         for page in data.get("query", {}).get("allpages", []):
             titles.append(page["title"])
             if max_pages is not None and len(titles) >= max_pages:
@@ -100,21 +252,33 @@ def fetch_all_page_titles(api_url: str, max_pages: int | None = None) -> list[st
     return titles
 
 
-def fetch_page_wikitext(api_url: str, page_title: str) -> str | None:
-    """Fetch the raw wikitext for a single page. Returns None if the page is missing."""
+def fetch_page_wikitext(
+    api_url: str,
+    page_title: str,
+    *,
+    session: WikiSession | None = None,
+) -> str | None:
+    """Fetch the raw wikitext for a single page. Returns None if missing."""
 
-    data = _request_json(api_url, params={
-        "action": "parse",
-        "page": page_title,
-        "prop": "wikitext",
-        "formatversion": "2",
-        "format": "json",
-    })
-    error = data.get("error")
-    if error:
+    data = _request_json(
+        api_url,
+        params={
+            "action": "parse",
+            "page": page_title,
+            "prop": "wikitext",
+            "formatversion": "2",
+            "format": "json",
+        },
+        session=session,
+    )
+    if data.get("error"):
         return None
     return data.get("parse", {}).get("wikitext")
 
+
+# ---------------------------------------------------------------------------
+# Wikitext cleaning and section parsing
+# ---------------------------------------------------------------------------
 
 def is_redirect(wikitext: str) -> bool:
     return bool(re.match(r"#REDIRECT", wikitext.strip(), re.IGNORECASE))
@@ -241,6 +405,10 @@ def sections_from_wikitext(
     return sections
 
 
+# ---------------------------------------------------------------------------
+# Document assembly
+# ---------------------------------------------------------------------------
+
 def wiki_page_to_document(
     *,
     page_title: str,
@@ -270,30 +438,42 @@ def fetch_wiki_documents(
     base_url: str,
     max_pages: int | None = None,
 ) -> tuple[WikiScrapeContext, list[DocumentModel]]:
-    """Enumerate and fetch wiki pages, returning canonical document models."""
+    """Acquire a Cloudflare session, enumerate pages, and fetch each as a document model."""
 
     api_url = wiki_api_url(base_url)
+    session = WikiSession.acquire(base_url)
     ctx = WikiScrapeContext(
         base_url=base_url.rstrip("/"),
         api_url=api_url,
         scrape_timestamp=datetime.now(tz=timezone.utc),
     )
-    titles = fetch_all_page_titles(api_url, max_pages=max_pages)
+
+    titles = fetch_all_page_titles(api_url, max_pages=max_pages, session=session)
+    total = len(titles)
+    print(f"Fetching {total} pages from {base_url}...", flush=True)
+
     documents: list[DocumentModel] = []
-    for title in titles:
-        wikitext = fetch_page_wikitext(api_url, title)
+    for i, title in enumerate(titles, 1):
+        if i % 100 == 0 or i == total:
+            print(f"  {i}/{total} pages processed", flush=True)
+        wikitext = fetch_page_wikitext(api_url, title, session=session)
         if not wikitext or is_redirect(wikitext):
             continue
         doc = wiki_page_to_document(page_title=title, wikitext=wikitext, ctx=ctx)
         if doc.sections:
             documents.append(doc)
+
     return ctx, documents
 
+
+# ---------------------------------------------------------------------------
+# Ingestion entry point
+# ---------------------------------------------------------------------------
 
 def ingest_wiki_source(
     *,
     base_url: str,
-    db_path,
+    db_path: Any,
     tokenizer_name: str,
     max_tokens: int,
     overlap_tokens: int,
