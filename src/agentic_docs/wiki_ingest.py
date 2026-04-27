@@ -14,9 +14,10 @@ supply it:
    cf_clearance cookie value from DevTools → Application → Cookies.
    Pass it via --cf-clearance or set MOODLE_DOCS_CF_CLEARANCE in the env.
 
-2. Automatic (Playwright fallback, for sites using the auto-solvable JS
-   challenge only — docs.moodle.org currently requires the manual path):
-   pip install playwright && playwright install chromium
+2. Automatic (Playwright + bundled Firefox):
+   pip install playwright && playwright install firefox
+   The browser opens visibly, attempts to auto-solve the challenge, then
+   prompts for human interaction if needed (or accepts a pasted cookie).
 
 All MediaWiki API calls use plain urllib with the cookie injected — no
 browser overhead during the actual scrape.
@@ -25,13 +26,11 @@ browser overhead during the actual scrape.
 from __future__ import annotations
 
 import json
-import platform
 import random
 import re
 import ssl
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
@@ -73,18 +72,13 @@ _DEFAULT_USER_AGENT = (
 # ---------------------------------------------------------------------------
 
 def _find_firefox() -> str | None:
-    """Return the path to the system Firefox binary, or None to use Playwright's bundled build."""
-    candidates: dict[str, list[str]] = {
-        "Darwin": ["/Applications/Firefox.app/Contents/MacOS/firefox"],
-        "Linux": ["/usr/bin/firefox", "/usr/bin/firefox-esr", "/usr/lib/firefox/firefox"],
-        "Windows": [
-            r"C:\Program Files\Mozilla Firefox\firefox.exe",
-            r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
-        ],
-    }
-    for path in candidates.get(platform.system(), []):
-        if Path(path).exists():
-            return path
+    """Always returns None — Playwright's Firefox requires its own patched build.
+
+    Unlike Chromium (which uses the standard CDP protocol and works with any
+    system Chrome binary), Playwright's Firefox uses a custom juggler-pipe
+    protocol that is only present in Playwright's bundled Firefox build.
+    Passing the system Firefox binary causes an immediate launch failure.
+    """
     return None
 
 
@@ -160,14 +154,11 @@ def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
             "  playwright install firefox"
         )
 
-    firefox_path = _find_firefox()
-    binary_label = firefox_path or "Playwright bundled Firefox"
-    print(f"Acquiring Cloudflare clearance ({binary_label})...", flush=True)
+    print("Acquiring Cloudflare clearance (Playwright bundled Firefox)...", flush=True)
 
     with sync_playwright() as p:
         browser = p.firefox.launch(
             headless=False,
-            executable_path=firefox_path,  # None → bundled Firefox
             slow_mo=random.randint(20, 50),
         )
         context = browser.new_context(
