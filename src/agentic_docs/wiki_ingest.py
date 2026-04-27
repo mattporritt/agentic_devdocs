@@ -35,6 +35,8 @@ import json
 import os
 import re
 import ssl
+import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
@@ -224,6 +226,12 @@ def _ssl_context() -> ssl.SSLContext:
         return ssl.create_default_context()
 
 
+# Ensures only one worker thread prompts for a fresh cookie on HTTP 403.
+# Other threads that hit 403 concurrently block here, then retry with the
+# updated session once the prompt is complete.
+_session_refresh_lock = threading.Lock()
+
+
 def _request_json(
     url: str,
     *,
@@ -232,7 +240,9 @@ def _request_json(
 ) -> Any:
     """Fetch a JSON endpoint, injecting Cloudflare credentials when a session is provided.
 
-    On HTTP 403 the user is prompted for a fresh cookie and the request is retried once.
+    On HTTP 403, acquires _session_refresh_lock and prompts for a fresh cookie
+    (unless another thread already refreshed the session while we waited for the
+    lock, in which case we just retry).  Thread-safe for parallel page fetching.
     """
     full_url = url
     if params:
@@ -254,12 +264,16 @@ def _request_json(
     if session is None:
         return _do_request()
 
+    cookie_before = session.cookies.get("cf_clearance", "")
     try:
         return _do_request()
     except HTTPError as exc:
         if exc.code == 403:
-            cookie, ua = _prompt_for_credentials(expired=True)
-            session.update(cookie, ua)
+            with _session_refresh_lock:
+                # Another thread may have already refreshed while we waited.
+                if session.cookies.get("cf_clearance", "") == cookie_before:
+                    cookie, ua = _prompt_for_credentials(expired=True)
+                    session.update(cookie, ua)
             return _do_request()
         raise
 
@@ -480,13 +494,22 @@ def wiki_page_to_document(
     return DocumentModel(id=document_id, title=page_title, metadata=metadata, sections=sections)
 
 
+DEFAULT_WORKERS = 8
+
+
 def fetch_wiki_documents(
     base_url: str,
     max_pages: int | None = None,
     cf_clearance: str | None = None,
     user_agent: str | None = None,
+    workers: int = DEFAULT_WORKERS,
 ) -> tuple[WikiScrapeContext, list[DocumentModel]]:
-    """Resolve credentials, enumerate pages, and fetch each as a document model."""
+    """Resolve credentials, enumerate pages, and fetch each as a document model.
+
+    Pages are fetched in parallel using a thread pool.  The session (Cloudflare
+    cookie) is shared across workers; a lock ensures only one thread prompts for
+    a fresh cookie if the session expires mid-run.
+    """
 
     # Resolve credentials: CLI args → env vars (after .env load) → interactive prompt.
     _load_dotenv()
@@ -508,18 +531,26 @@ def fetch_wiki_documents(
 
     titles = fetch_all_page_titles(api_url, max_pages=max_pages, session=session)
     total = len(titles)
-    print(f"Fetching {total} pages from {base_url}...", flush=True)
+    print(f"Fetching {total} pages from {base_url} ({workers} workers)...", flush=True)
 
-    documents: list[DocumentModel] = []
-    for i, title in enumerate(titles, 1):
-        if i % 100 == 0 or i == total:
-            print(f"  {i}/{total} pages processed", flush=True)
+    def _fetch_one(title: str) -> DocumentModel | None:
         wikitext = fetch_page_wikitext(api_url, title, session=session)
         if not wikitext or is_redirect(wikitext):
-            continue
+            return None
         doc = wiki_page_to_document(page_title=title, wikitext=wikitext, ctx=ctx)
-        if doc.sections:
-            documents.append(doc)
+        return doc if doc.sections else None
+
+    documents: list[DocumentModel] = []
+    completed = 0
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        futures = {executor.submit(_fetch_one, title): title for title in titles}
+        for future in as_completed(futures):
+            completed += 1
+            if completed % 100 == 0 or completed == total:
+                print(f"  {completed}/{total} pages processed", flush=True)
+            doc = future.result()
+            if doc:
+                documents.append(doc)
 
     return ctx, documents
 
@@ -539,12 +570,17 @@ def ingest_wiki_source(
     append: bool = False,
     cf_clearance: str | None = None,
     user_agent: str | None = None,
+    workers: int = DEFAULT_WORKERS,
 ) -> dict[str, int | str]:
     """Ingest the Moodle user documentation wiki into the shared SQLite schema."""
 
     tokenizer = get_tokenizer(tokenizer_name)
     ctx, documents = fetch_wiki_documents(
-        base_url=base_url, max_pages=max_pages, cf_clearance=cf_clearance, user_agent=user_agent
+        base_url=base_url,
+        max_pages=max_pages,
+        cf_clearance=cf_clearance,
+        user_agent=user_agent,
+        workers=workers,
     )
     store = SQLiteStore(db_path)
     store.initialize()

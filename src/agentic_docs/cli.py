@@ -488,6 +488,7 @@ def ingest_userdocs(
     append: Annotated[bool, typer.Option("--append", help="Add to an existing database without wiping it first.")] = False,
     cf_clearance: Annotated[str | None, typer.Option("--cf-clearance", help="Cloudflare cf_clearance cookie value. Reads MOODLE_DOCS_CF_CLEARANCE env var if not set.")] = None,
     user_agent: Annotated[str | None, typer.Option("--user-agent", help="User-Agent to send with requests. Must match the browser that issued cf_clearance. Reads MOODLE_DOCS_USER_AGENT env var if not set.")] = None,
+    workers: Annotated[int, typer.Option("--workers", help="Number of parallel page-fetch workers.")] = 8,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Scrape the Moodle user documentation wiki and index it into SQLite."""
@@ -502,6 +503,7 @@ def ingest_userdocs(
         append=append,
         cf_clearance=cf_clearance or os.environ.get("MOODLE_DOCS_CF_CLEARANCE"),
         user_agent=user_agent or os.environ.get("MOODLE_DOCS_USER_AGENT"),
+        workers=workers,
     )
     _emit(result, json_output)
 
