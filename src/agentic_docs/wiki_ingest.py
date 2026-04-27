@@ -59,6 +59,14 @@ _EXTERNAL_LINK_BARE = re.compile(r"\[https?://\S+\]")
 _FORMATTING = re.compile(r"'{2,3}")
 _EXCESS_BLANK_LINES = re.compile(r"\n{3,}")
 
+# Generic desktop UA used when a cf_clearance cookie is supplied manually and
+# no Playwright browser is launched to read navigator.userAgent.
+_DEFAULT_USER_AGENT = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+    "AppleWebKit/537.36 (KHTML, like Gecko) "
+    "Chrome/124.0.0.0 Safari/537.36"
+)
+
 
 # ---------------------------------------------------------------------------
 # Cloudflare clearance
@@ -191,31 +199,53 @@ def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
         cookies = {c["name"]: c["value"] for c in context.cookies()}
 
         # --- Phase 2: human-in-the-loop ---
+        manual_cookie: str | None = None
         if "cf_clearance" not in cookies:
             print(
                 "\n[ACTION REQUIRED]\n"
                 "The Cloudflare challenge requires human interaction.\n"
-                "A browser window is open. Please:\n"
-                "  1. Click the 'I am human' / 'Verify you are human' checkbox.\n"
-                "  2. Wait for the Moodle docs page to load.\n"
-                "  3. Press Enter here to continue.",
+                "Choose an option:\n"
+                "\n"
+                "  1. Solve in the open browser window:\n"
+                "     a. Click the 'I am human' / 'Verify you are human' checkbox.\n"
+                "     b. Wait for the Moodle docs page to load.\n"
+                "     c. Press Enter here to continue.\n"
+                "\n"
+                "  2. Provide the cf_clearance cookie from your regular browser:\n"
+                "     a. Open the docs URL in your normal browser (Chrome, Firefox, Safari).\n"
+                "     b. Open DevTools  →  Application (Chrome) or Storage (Firefox).\n"
+                "     c. Select Cookies  →  https://docs.moodle.org.\n"
+                "     d. Copy the VALUE of the 'cf_clearance' cookie.\n"
+                "     e. Paste it here and press Enter  (the automated browser will close).\n"
+                "\n"
+                "Enter cookie value, or press Enter to use the open browser: ",
+                end="",
                 flush=True,
             )
-            input()  # block until user confirms
-            cookies = {c["name"]: c["value"] for c in context.cookies()}
+            response = input().strip()
+            if response:
+                manual_cookie = response
+            else:
+                cookies = {c["name"]: c["value"] for c in context.cookies()}
 
         user_agent: str = page.evaluate("() => navigator.userAgent")
         browser.close()
 
+    if manual_cookie:
+        return {"cf_clearance": manual_cookie}, _DEFAULT_USER_AGENT
+
     if "cf_clearance" not in cookies:
         raise RuntimeError(
             "Cloudflare challenge was not resolved.\n\n"
-            "If the browser closed before you could solve the challenge, re-run\n"
-            "and solve it when prompted, or use the manual cookie workflow:\n"
-            "  1. Open the URL in your regular browser\n"
-            "  2. DevTools → Application → Cookies — copy cf_clearance\n"
-            "  3. Re-run with: --cf-clearance <value>\n"
-            "     or set: MOODLE_DOCS_CF_CLEARANCE=<value>"
+            "Re-run and either solve the challenge in the browser window, or paste\n"
+            "the cf_clearance cookie value when prompted.\n"
+            "\n"
+            "To extract cf_clearance from your regular browser:\n"
+            "  Chrome/Edge : DevTools (F12) → Application → Cookies → docs.moodle.org\n"
+            "  Firefox     : DevTools (F12) → Storage → Cookies → docs.moodle.org\n"
+            "  Safari      : Develop → Show Web Inspector → Storage → Cookies\n"
+            "Copy the VALUE of the 'cf_clearance' entry and pass it with:\n"
+            "  --cf-clearance <value>   or   MOODLE_DOCS_CF_CLEARANCE=<value>"
         )
 
     print("Clearance acquired.", flush=True)
@@ -260,11 +290,7 @@ class WikiSession:
         """Build a session from a cf_clearance cookie copied from a real browser."""
         return cls(
             cookies={"cf_clearance": cf_clearance},
-            user_agent=(
-                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
+            user_agent=_DEFAULT_USER_AGENT,
             base_url=base_url,
         )
 
