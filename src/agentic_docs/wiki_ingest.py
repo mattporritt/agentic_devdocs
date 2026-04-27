@@ -58,12 +58,13 @@ _EXTERNAL_LINK_BARE = re.compile(r"\[https?://\S+\]")
 _FORMATTING = re.compile(r"'{2,3}")
 _EXCESS_BLANK_LINES = re.compile(r"\n{3,}")
 
-# Generic desktop UA used when a cf_clearance cookie is supplied manually and
-# no Playwright browser is launched to read navigator.userAgent.
+# Firefox UA used as the fallback when no Playwright browser is launched.
+# Must match the browser family the cf_clearance cookie was issued for —
+# Cloudflare binds clearance to User-Agent. We use Firefox everywhere
+# (automated Playwright flow and manual cookie path) to keep this consistent.
 _DEFAULT_USER_AGENT = (
-    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-    "AppleWebKit/537.36 (KHTML, like Gecko) "
-    "Chrome/124.0.0.0 Safari/537.36"
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:138.0) "
+    "Gecko/20100101 Firefox/138.0"
 )
 
 
@@ -187,6 +188,7 @@ def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
 
         # --- Phase 2: human-in-the-loop ---
         manual_cookie: str | None = None
+        manual_ua: str = _DEFAULT_USER_AGENT
         if "cf_clearance" not in cookies:
             print(
                 "\n[ACTION REQUIRED]\n"
@@ -199,9 +201,9 @@ def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
                 "     c. Press Enter here to continue.\n"
                 "\n"
                 "  2. Provide the cf_clearance cookie from your regular browser:\n"
-                "     a. Open the docs URL in your normal browser (Chrome, Firefox, Safari).\n"
-                "     b. Open DevTools  →  Application (Chrome) or Storage (Firefox).\n"
-                "     c. Select Cookies  →  https://docs.moodle.org.\n"
+                "     a. Open the docs URL in Firefox (or any browser).\n"
+                "     b. Open DevTools → Storage (Firefox) or Application (Chrome).\n"
+                "     c. Select Cookies → https://docs.moodle.org.\n"
                 "     d. Copy the VALUE of the 'cf_clearance' cookie.\n"
                 "     e. Paste it here and press Enter  (the automated browser will close).\n"
                 "\n"
@@ -212,6 +214,16 @@ def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
             response = input().strip()
             if response:
                 manual_cookie = response
+                # cf_clearance is bound to the User-Agent it was issued for.
+                # Ask for the browser's UA so urllib requests won't be rejected.
+                print(
+                    "Paste your browser's User-Agent and press Enter\n"
+                    "(Firefox DevTools console: copy the output of  navigator.userAgent)\n"
+                    "or press Enter to use the built-in Firefox UA: ",
+                    end="",
+                    flush=True,
+                )
+                manual_ua = input().strip() or _DEFAULT_USER_AGENT
             else:
                 cookies = {c["name"]: c["value"] for c in context.cookies()}
 
@@ -219,7 +231,7 @@ def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
         browser.close()
 
     if manual_cookie:
-        return {"cf_clearance": manual_cookie}, _DEFAULT_USER_AGENT
+        return {"cf_clearance": manual_cookie}, manual_ua
 
     if "cf_clearance" not in cookies:
         raise RuntimeError(
@@ -273,11 +285,20 @@ class WikiSession:
         return cls(cookies=cookies, user_agent=user_agent, base_url=base_url)
 
     @classmethod
-    def from_cookie(cls, cf_clearance: str, base_url: str) -> WikiSession:
-        """Build a session from a cf_clearance cookie copied from a real browser."""
+    def from_cookie(
+        cls,
+        cf_clearance: str,
+        base_url: str,
+        user_agent: str | None = None,
+    ) -> WikiSession:
+        """Build a session from a cf_clearance cookie copied from a real browser.
+
+        Pass user_agent matching the browser that issued the cookie — Cloudflare
+        binds cf_clearance to the UA it was issued for.
+        """
         return cls(
             cookies={"cf_clearance": cf_clearance},
-            user_agent=_DEFAULT_USER_AGENT,
+            user_agent=user_agent or _DEFAULT_USER_AGENT,
             base_url=base_url,
         )
 
@@ -584,12 +605,13 @@ def fetch_wiki_documents(
     base_url: str,
     max_pages: int | None = None,
     cf_clearance: str | None = None,
+    user_agent: str | None = None,
 ) -> tuple[WikiScrapeContext, list[DocumentModel]]:
     """Acquire a Cloudflare session, enumerate pages, and fetch each as a document model."""
 
     api_url = wiki_api_url(base_url)
     if cf_clearance:
-        session = WikiSession.from_cookie(cf_clearance, base_url)
+        session = WikiSession.from_cookie(cf_clearance, base_url, user_agent=user_agent)
     else:
         session = WikiSession.acquire(base_url)
     ctx = WikiScrapeContext(
@@ -630,12 +652,13 @@ def ingest_wiki_source(
     max_pages: int | None = None,
     append: bool = False,
     cf_clearance: str | None = None,
+    user_agent: str | None = None,
 ) -> dict[str, int | str]:
     """Ingest the Moodle user documentation wiki into the shared SQLite schema."""
 
     tokenizer = get_tokenizer(tokenizer_name)
     ctx, documents = fetch_wiki_documents(
-        base_url=base_url, max_pages=max_pages, cf_clearance=cf_clearance
+        base_url=base_url, max_pages=max_pages, cf_clearance=cf_clearance, user_agent=user_agent
     )
     store = SQLiteStore(db_path)
     store.initialize()
