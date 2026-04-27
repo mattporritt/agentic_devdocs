@@ -5,32 +5,39 @@
 
 """Bounded MediaWiki ingestion for the Moodle user documentation wiki.
 
-docs.moodle.org is behind Cloudflare's Managed Challenge, which requires a
-real browser session cookie (cf_clearance) to access. There are two ways to
-supply it:
+docs.moodle.org is behind Cloudflare's Managed Challenge, which blocks automated
+HTTP clients.  Access requires a cf_clearance cookie obtained from a real browser.
 
-1. Manual (recommended for developers):
-   Open docs.moodle.org/502/en in your regular browser, then copy the
-   cf_clearance cookie value from DevTools → Application → Cookies.
-   Pass it via --cf-clearance or set MOODLE_DOCS_CF_CLEARANCE in the env.
+Credential lookup order
+-----------------------
+1. --cf-clearance / --user-agent CLI flags (or MOODLE_DOCS_CF_CLEARANCE /
+   MOODLE_DOCS_USER_AGENT environment variables).
+2. A .env file in the current working directory — useful for keeping credentials
+   out of shell history.  Example .env:
 
-2. Automatic (Playwright + bundled Firefox):
-   pip install playwright && playwright install firefox
-   The browser opens visibly, attempts to auto-solve the challenge, then
-   prompts for human interaction if needed (or accepts a pasted cookie).
+       MOODLE_DOCS_CF_CLEARANCE=<value>
+       MOODLE_DOCS_USER_AGENT=Mozilla/5.0 (Macintosh; ...
 
-All MediaWiki API calls use plain urllib with the cookie injected — no
-browser overhead during the actual scrape.
+   Add .env to .gitignore so credentials are never committed.
+3. Interactive prompt — if no credentials are found the tool prompts for the
+   cookie value and User-Agent with step-by-step browser instructions.
+
+If the cookie expires mid-run (HTTP 403), the interactive prompt re-appears so
+the user can supply a fresh cookie without restarting the scrape.
+
+All MediaWiki API calls use plain urllib with the cookie injected — no browser
+overhead during the actual scrape.
 """
 
 from __future__ import annotations
 
 import json
-import random
+import os
 import re
 import ssl
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
@@ -46,9 +53,6 @@ DEFAULT_BASE_URL = "https://docs.moodle.org/502/en"
 SOURCE_NAME = "user_docs"
 SOURCE_TYPE = "scraped_web"
 
-# Refresh the Cloudflare session 5 minutes before cf_clearance's 30-min expiry.
-_CF_REFRESH_AFTER_SECONDS = 1500
-
 _HEADING_PATTERN = re.compile(r"^(={1,6})\s*(.+?)\s*\1\s*$", re.MULTILINE)
 _SLUG_STRIP = re.compile(r"[^a-z0-9]+")
 _REF_BLOCK = re.compile(r"<ref\b[^>]*>.*?</ref>", re.DOTALL | re.IGNORECASE)
@@ -58,10 +62,9 @@ _EXTERNAL_LINK_BARE = re.compile(r"\[https?://\S+\]")
 _FORMATTING = re.compile(r"'{2,3}")
 _EXCESS_BLANK_LINES = re.compile(r"\n{3,}")
 
-# Firefox UA used as the fallback when no Playwright browser is launched.
-# Must match the browser family the cf_clearance cookie was issued for —
-# Cloudflare binds clearance to User-Agent. We use Firefox everywhere
-# (automated Playwright flow and manual cookie path) to keep this consistent.
+# Fallback Firefox UA when the user does not supply one.  Cloudflare binds
+# cf_clearance to the UA of the browser that solved the challenge, so this
+# must match the browser family used to obtain the cookie.
 _DEFAULT_USER_AGENT = (
     "Mozilla/5.0 (Macintosh; Intel Mac OS X 10.15; rv:138.0) "
     "Gecko/20100101 Firefox/138.0"
@@ -69,220 +72,104 @@ _DEFAULT_USER_AGENT = (
 
 
 # ---------------------------------------------------------------------------
-# Cloudflare clearance
+# .env loader
 # ---------------------------------------------------------------------------
 
-def _find_firefox() -> str | None:
-    """Always returns None — Playwright's Firefox requires its own patched build.
+def _load_dotenv(env_path: Path | None = None) -> None:
+    """Load KEY=VALUE pairs from a .env file into os.environ (no-op if missing).
 
-    Unlike Chromium (which uses the standard CDP protocol and works with any
-    system Chrome binary), Playwright's Firefox uses a custom juggler-pipe
-    protocol that is only present in Playwright's bundled Firefox build.
-    Passing the system Firefox binary causes an immediate launch failure.
+    Existing env vars are never overwritten, so shell exports and CLI flags
+    always take precedence over the .env file.
     """
-    return None
+    path = env_path or Path.cwd() / ".env"
+    if not path.exists():
+        return
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and key not in os.environ:
+            os.environ[key] = value
 
 
-def _jitter_mouse(page: Any) -> None:
-    """Move the mouse in a few randomised arcs to mimic human hand movement."""
-    for _ in range(random.randint(3, 6)):
-        page.mouse.move(
-            random.randint(150, 1100),
-            random.randint(100, 600),
+# ---------------------------------------------------------------------------
+# Interactive credential prompt
+# ---------------------------------------------------------------------------
+
+_CF_COOKIE_INSTRUCTIONS = """\
+
+docs.moodle.org requires a Cloudflare cf_clearance cookie.
+To obtain one:
+  1. Open https://docs.moodle.org/502/en in Firefox (or any browser).
+  2. Open DevTools (F12).
+  3. Firefox : Storage tab → Cookies → https://docs.moodle.org
+     Chrome  : Application tab → Cookies → https://docs.moodle.org
+  4. Copy the VALUE of the 'cf_clearance' row.
+
+Tip: save credentials to a .env file in this directory to skip this prompt:
+  MOODLE_DOCS_CF_CLEARANCE=<value>
+  MOODLE_DOCS_USER_AGENT=<value>
+"""
+
+_CF_UA_INSTRUCTIONS = """\
+Paste your browser's User-Agent string and press Enter.
+(Firefox DevTools console: navigator.userAgent)
+Cloudflare binds cf_clearance to the UA of the issuing browser.
+Press Enter alone to use the built-in Firefox UA.\
+"""
+
+
+def _prompt_for_credentials(*, expired: bool = False) -> tuple[str, str]:
+    """Interactively prompt for cf_clearance + User-Agent.  Returns (cookie, ua)."""
+    if expired:
+        print(
+            "\n[SESSION EXPIRED]\n"
+            "The cf_clearance cookie was rejected (HTTP 403).\n"
+            "Please get a fresh cookie from your browser and paste it below.",
+            flush=True,
         )
-        page.wait_for_timeout(random.randint(40, 120))
+    print(_CF_COOKIE_INSTRUCTIONS, flush=True)
+    while True:
+        print("Paste cf_clearance value: ", end="", flush=True)
+        cookie = input().strip()
+        if cookie:
+            break
+        print("  (value cannot be empty — try again)", flush=True)
+
+    print(f"\n{_CF_UA_INSTRUCTIONS}\n", flush=True)
+    print("User-Agent: ", end="", flush=True)
+    ua = input().strip() or _DEFAULT_USER_AGENT
+    return cookie, ua
 
 
-def _try_click_turnstile(page: Any) -> None:
-    """Click the Cloudflare Turnstile 'I am human' checkbox if it is visible.
-
-    The checkbox lives inside a cross-origin iframe served from
-    challenges.cloudflare.com. Playwright can interact with cross-origin
-    frames directly; bounding_box() returns viewport-relative coordinates so
-    page.mouse is used for the jittered click rather than element.click().
-    """
-    try:
-        cf_frame = next(
-            (f for f in page.frames if "challenges.cloudflare.com" in (f.url or "")),
-            None,
-        )
-        if cf_frame is None:
-            return
-        checkbox = cf_frame.locator("input[type='checkbox']").first
-        if not checkbox.is_visible(timeout=300):
-            return
-        box = checkbox.bounding_box()
-        if not box:
-            return
-        cx = box["x"] + box["width"] / 2
-        cy = box["y"] + box["height"] / 2
-        # Approach from a nearby random position, pause, then click with a tiny offset.
-        page.mouse.move(cx + random.uniform(-30, 30), cy + random.uniform(-30, 30))
-        page.wait_for_timeout(random.randint(250, 500))
-        page.mouse.move(cx + random.uniform(-3, 3), cy + random.uniform(-3, 3))
-        page.wait_for_timeout(random.randint(80, 180))
-        page.mouse.click(cx + random.uniform(-1, 1), cy + random.uniform(-1, 1))
-    except Exception:
-        pass  # Non-fatal — challenge may auto-solve or be a different variant
-
-
-_CF_AUTO_SOLVE_SECONDS = 30
-
-
-def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
-    """Open a visible browser, solve the Cloudflare challenge, return (cookies, user_agent).
-
-    Phase 1 (auto): polls for up to _CF_AUTO_SOLVE_SECONDS, trying to click the
-    Turnstile checkbox each tick.  The Cloudflare JS/fingerprint challenge often
-    auto-resolves without any interaction; the Turnstile 'I am human' click covers
-    the interactive variant.
-
-    Phase 2 (human-in-the-loop): if still blocked after the auto phase, the browser
-    window stays open and the user is prompted to solve the challenge manually, then
-    press Enter.  This reliably handles the Cloudflare Managed Challenge that detects
-    automation fingerprints.
-
-    The browser closes as soon as cf_clearance is obtained; all subsequent HTTP
-    requests use plain urllib with the captured cookie.
-    """
-    try:
-        from playwright.sync_api import sync_playwright
-    except ImportError:
-        raise ImportError(
-            "Playwright is required to acquire Cloudflare clearance.\n"
-            "Install it with:\n"
-            "  pip install playwright\n"
-            "  playwright install firefox"
-        )
-
-    print("Acquiring Cloudflare clearance (Playwright bundled Firefox)...", flush=True)
-
-    with sync_playwright() as p:
-        browser = p.firefox.launch(
-            headless=False,
-            slow_mo=random.randint(20, 50),
-        )
-        context = browser.new_context(
-            viewport={"width": 1280, "height": 720},
-            locale="en-US",
-        )
-        page = context.new_page()
-
-        # Jitter before navigation so the browser doesn't look like it jumped
-        # straight to the target URL from a cold start.
-        _jitter_mouse(page)
-
-        page.goto(url, wait_until="domcontentloaded", timeout=60_000)
-
-        # --- Phase 1: auto-solve ---
-        for tick in range(_CF_AUTO_SOLVE_SECONDS):
-            cookies = {c["name"]: c["value"] for c in context.cookies()}
-            if "cf_clearance" in cookies:
-                break
-            if tick % 5 == 0:
-                print(f"  auto-solving… ({tick}s, title={page.title()!r})", flush=True)
-            _try_click_turnstile(page)
-            page.wait_for_timeout(random.randint(900, 1100))
-
-        cookies = {c["name"]: c["value"] for c in context.cookies()}
-
-        # --- Phase 2: human-in-the-loop ---
-        manual_cookie: str | None = None
-        manual_ua: str = _DEFAULT_USER_AGENT
-        if "cf_clearance" not in cookies:
-            print(
-                "\n[ACTION REQUIRED]\n"
-                "The Cloudflare challenge requires human interaction.\n"
-                "Choose an option:\n"
-                "\n"
-                "  1. Solve in the open browser window:\n"
-                "     a. Click the 'I am human' / 'Verify you are human' checkbox.\n"
-                "     b. Wait for the Moodle docs page to load.\n"
-                "     c. Press Enter here to continue.\n"
-                "\n"
-                "  2. Provide the cf_clearance cookie from your regular browser:\n"
-                "     a. Open the docs URL in Firefox (or any browser).\n"
-                "     b. Open DevTools → Storage (Firefox) or Application (Chrome).\n"
-                "     c. Select Cookies → https://docs.moodle.org.\n"
-                "     d. Copy the VALUE of the 'cf_clearance' cookie.\n"
-                "     e. Paste it here and press Enter  (the automated browser will close).\n"
-                "\n"
-                "Enter cookie value, or press Enter to use the open browser: ",
-                end="",
-                flush=True,
-            )
-            response = input().strip()
-            if response:
-                manual_cookie = response
-                # cf_clearance is bound to the User-Agent it was issued for.
-                # Ask for the browser's UA so urllib requests won't be rejected.
-                print(
-                    "Paste your browser's User-Agent and press Enter\n"
-                    "(Firefox DevTools console: copy the output of  navigator.userAgent)\n"
-                    "or press Enter to use the built-in Firefox UA: ",
-                    end="",
-                    flush=True,
-                )
-                manual_ua = input().strip() or _DEFAULT_USER_AGENT
-            else:
-                cookies = {c["name"]: c["value"] for c in context.cookies()}
-
-        user_agent: str = page.evaluate("() => navigator.userAgent")
-        browser.close()
-
-    if manual_cookie:
-        return {"cf_clearance": manual_cookie}, manual_ua
-
-    if "cf_clearance" not in cookies:
-        raise RuntimeError(
-            "Cloudflare challenge was not resolved.\n\n"
-            "Re-run and either solve the challenge in the browser window, or paste\n"
-            "the cf_clearance cookie value when prompted.\n"
-            "\n"
-            "To extract cf_clearance from your regular browser:\n"
-            "  Chrome/Edge : DevTools (F12) → Application → Cookies → docs.moodle.org\n"
-            "  Firefox     : DevTools (F12) → Storage → Cookies → docs.moodle.org\n"
-            "  Safari      : Develop → Show Web Inspector → Storage → Cookies\n"
-            "Copy the VALUE of the 'cf_clearance' entry and pass it with:\n"
-            "  --cf-clearance <value>   or   MOODLE_DOCS_CF_CLEARANCE=<value>"
-        )
-
-    print("Clearance acquired.", flush=True)
-    return cookies, user_agent
-
+# ---------------------------------------------------------------------------
+# Session
+# ---------------------------------------------------------------------------
 
 @dataclass
 class WikiSession:
     """Cloudflare clearance credentials for a single wiki scraping run.
 
-    Holds the cf_clearance cookie and the matching User-Agent string (Cloudflare
-    ties clearance to the UA it was issued for). Tracks acquisition time so
-    urllib callers can refresh proactively before expiry.
+    Holds the cf_clearance cookie and the matching User-Agent string.
+    Cloudflare binds cf_clearance to the UA of the browser that solved the
+    challenge, so both must be kept in sync.
     """
 
     cookies: dict[str, str]
     user_agent: str
     base_url: str
-    acquired_at: datetime = field(default_factory=lambda: datetime.now(tz=timezone.utc))
 
     @property
     def cookie_header(self) -> str:
         return "; ".join(f"{k}={v}" for k, v in self.cookies.items())
 
-    def needs_refresh(self) -> bool:
-        age = (datetime.now(tz=timezone.utc) - self.acquired_at).total_seconds()
-        return age > _CF_REFRESH_AFTER_SECONDS
-
-    def refresh(self) -> None:
-        print("Refreshing Cloudflare session...", flush=True)
-        self.cookies, self.user_agent = _acquire_cf_clearance(self.base_url)
-        self.acquired_at = datetime.now(tz=timezone.utc)
-
-    @classmethod
-    def acquire(cls, base_url: str) -> WikiSession:
-        """Acquire a session via Playwright (for auto-solvable JS challenges)."""
-        cookies, user_agent = _acquire_cf_clearance(base_url)
-        return cls(cookies=cookies, user_agent=user_agent, base_url=base_url)
+    def update(self, cookie: str, user_agent: str) -> None:
+        """Replace credentials in-place (used after a 403 mid-run)."""
+        self.cookies = {"cf_clearance": cookie}
+        self.user_agent = user_agent
 
     @classmethod
     def from_cookie(
@@ -291,11 +178,7 @@ class WikiSession:
         base_url: str,
         user_agent: str | None = None,
     ) -> WikiSession:
-        """Build a session from a cf_clearance cookie copied from a real browser.
-
-        Pass user_agent matching the browser that issued the cookie — Cloudflare
-        binds cf_clearance to the UA it was issued for.
-        """
+        """Build a session from a cf_clearance cookie."""
         return cls(
             cookies={"cf_clearance": cf_clearance},
             user_agent=user_agent or _DEFAULT_USER_AGENT,
@@ -347,11 +230,9 @@ def _request_json(
     params: dict[str, Any] | None = None,
     session: WikiSession | None = None,
 ) -> Any:
-    """Fetch a JSON endpoint, using Cloudflare credentials when a session is provided.
+    """Fetch a JSON endpoint, injecting Cloudflare credentials when a session is provided.
 
-    On a 403 response the session is refreshed once and the request retried.
-    A proactive refresh is also triggered when the session is within 5 minutes
-    of its expiry window.
+    On HTTP 403 the user is prompted for a fresh cookie and the request is retried once.
     """
     full_url = url
     if params:
@@ -373,14 +254,12 @@ def _request_json(
     if session is None:
         return _do_request()
 
-    if session.needs_refresh():
-        session.refresh()
-
     try:
         return _do_request()
     except HTTPError as exc:
         if exc.code == 403:
-            session.refresh()
+            cookie, ua = _prompt_for_credentials(expired=True)
+            session.update(cookie, ua)
             return _do_request()
         raise
 
@@ -607,13 +486,20 @@ def fetch_wiki_documents(
     cf_clearance: str | None = None,
     user_agent: str | None = None,
 ) -> tuple[WikiScrapeContext, list[DocumentModel]]:
-    """Acquire a Cloudflare session, enumerate pages, and fetch each as a document model."""
+    """Resolve credentials, enumerate pages, and fetch each as a document model."""
+
+    # Resolve credentials: CLI args → env vars (after .env load) → interactive prompt.
+    _load_dotenv()
+    cookie = cf_clearance or os.environ.get("MOODLE_DOCS_CF_CLEARANCE")
+    ua = user_agent or os.environ.get("MOODLE_DOCS_USER_AGENT")
+
+    if not cookie:
+        cookie, ua = _prompt_for_credentials()
+    elif not ua:
+        ua = _DEFAULT_USER_AGENT
 
     api_url = wiki_api_url(base_url)
-    if cf_clearance:
-        session = WikiSession.from_cookie(cf_clearance, base_url, user_agent=user_agent)
-    else:
-        session = WikiSession.acquire(base_url)
+    session = WikiSession.from_cookie(cookie, base_url, user_agent=ua)
     ctx = WikiScrapeContext(
         base_url=base_url.rstrip("/"),
         api_url=api_url,

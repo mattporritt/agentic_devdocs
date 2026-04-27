@@ -4,15 +4,17 @@
 # Commercial use requires a separate written agreement with Moodle.
 
 import json
-from datetime import datetime, timedelta, timezone
-from io import BytesIO
+import os
+import tempfile
+from datetime import datetime, timezone
+from pathlib import Path
 from unittest.mock import MagicMock, patch
 from urllib.error import HTTPError
 
 from agentic_docs.wiki_ingest import (
     WikiScrapeContext,
     WikiSession,
-    _CF_REFRESH_AFTER_SECONDS,
+    _load_dotenv,
     _request_json,
     clean_wikitext,
     is_redirect,
@@ -36,21 +38,11 @@ def _ctx() -> WikiScrapeContext:
     )
 
 
-def _fresh_session() -> WikiSession:
+def _session() -> WikiSession:
     return WikiSession(
         cookies={"cf_clearance": "abc123", "__cf_bm": "xyz"},
-        user_agent="Mozilla/5.0 Playwright",
+        user_agent="Mozilla/5.0 Firefox/138.0",
         base_url="https://docs.moodle.org/502/en",
-    )
-
-
-def _stale_session() -> WikiSession:
-    stale_time = datetime.now(tz=timezone.utc) - timedelta(seconds=_CF_REFRESH_AFTER_SECONDS + 60)
-    return WikiSession(
-        cookies={"cf_clearance": "stale"},
-        user_agent="Mozilla/5.0 Playwright",
-        base_url="https://docs.moodle.org/502/en",
-        acquired_at=stale_time,
     )
 
 
@@ -75,58 +67,89 @@ def test_page_source_path_slugifies_title() -> None:
 
 
 # ---------------------------------------------------------------------------
+# .env loader
+# ---------------------------------------------------------------------------
+
+def test_load_dotenv_sets_missing_vars() -> None:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("MOODLE_DOCS_CF_CLEARANCE=test-cookie\n")
+        f.write("MOODLE_DOCS_USER_AGENT=Mozilla/5.0 Firefox\n")
+        env_path = Path(f.name)
+    try:
+        os.environ.pop("MOODLE_DOCS_CF_CLEARANCE", None)
+        os.environ.pop("MOODLE_DOCS_USER_AGENT", None)
+        _load_dotenv(env_path)
+        assert os.environ["MOODLE_DOCS_CF_CLEARANCE"] == "test-cookie"
+        assert os.environ["MOODLE_DOCS_USER_AGENT"] == "Mozilla/5.0 Firefox"
+    finally:
+        os.environ.pop("MOODLE_DOCS_CF_CLEARANCE", None)
+        os.environ.pop("MOODLE_DOCS_USER_AGENT", None)
+        env_path.unlink()
+
+
+def test_load_dotenv_does_not_overwrite_existing_vars() -> None:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("MOODLE_DOCS_CF_CLEARANCE=from-file\n")
+        env_path = Path(f.name)
+    try:
+        os.environ["MOODLE_DOCS_CF_CLEARANCE"] = "from-shell"
+        _load_dotenv(env_path)
+        assert os.environ["MOODLE_DOCS_CF_CLEARANCE"] == "from-shell"
+    finally:
+        os.environ.pop("MOODLE_DOCS_CF_CLEARANCE", None)
+        env_path.unlink()
+
+
+def test_load_dotenv_ignores_comments_and_blanks() -> None:
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".env", delete=False) as f:
+        f.write("# this is a comment\n\nMOODLE_DOCS_CF_CLEARANCE=value\n")
+        env_path = Path(f.name)
+    try:
+        os.environ.pop("MOODLE_DOCS_CF_CLEARANCE", None)
+        _load_dotenv(env_path)
+        assert os.environ["MOODLE_DOCS_CF_CLEARANCE"] == "value"
+    finally:
+        os.environ.pop("MOODLE_DOCS_CF_CLEARANCE", None)
+        env_path.unlink()
+
+
+def test_load_dotenv_is_noop_for_missing_file() -> None:
+    _load_dotenv(Path("/nonexistent/.env"))  # must not raise
+
+
+# ---------------------------------------------------------------------------
 # WikiSession
 # ---------------------------------------------------------------------------
 
-def test_wiki_session_fresh_does_not_need_refresh() -> None:
-    assert _fresh_session().needs_refresh() is False
-
-
-def test_wiki_session_stale_needs_refresh() -> None:
-    assert _stale_session().needs_refresh() is True
-
-
-def test_wiki_session_refresh_updates_credentials() -> None:
-    session = _stale_session()
-    new_cookies = {"cf_clearance": "fresh999"}
-    new_ua = "Mozilla/5.0 New"
-
-    with patch("agentic_docs.wiki_ingest._acquire_cf_clearance", return_value=(new_cookies, new_ua)):
-        session.refresh()
-
-    assert session.cookies == new_cookies
-    assert session.user_agent == new_ua
-    assert session.needs_refresh() is False
-
-
 def test_wiki_session_cookie_header_formats_correctly() -> None:
-    session = _fresh_session()
+    session = _session()
     header = session.cookie_header
     assert "cf_clearance=abc123" in header
     assert "__cf_bm=xyz" in header
 
 
-def test_wiki_session_from_cookie_builds_session_without_playwright() -> None:
+def test_wiki_session_update_replaces_credentials() -> None:
+    session = _session()
+    session.update("new-cookie", "Mozilla/5.0 Firefox/150.0")
+    assert session.cookies == {"cf_clearance": "new-cookie"}
+    assert session.user_agent == "Mozilla/5.0 Firefox/150.0"
+
+
+def test_wiki_session_from_cookie_builds_session() -> None:
     session = WikiSession.from_cookie("test-clearance-value", "https://docs.moodle.org/502/en")
     assert session.cookies == {"cf_clearance": "test-clearance-value"}
     assert session.base_url == "https://docs.moodle.org/502/en"
     assert "Mozilla" in session.user_agent
-    assert session.needs_refresh() is False
 
 
-def test_wiki_session_acquire_calls_playwright_helper() -> None:
-    cookies = {"cf_clearance": "tok"}
-    ua = "Mozilla/5.0"
-    with patch("agentic_docs.wiki_ingest._acquire_cf_clearance", return_value=(cookies, ua)) as mock:
-        session = WikiSession.acquire("https://docs.moodle.org/502/en")
-    mock.assert_called_once_with("https://docs.moodle.org/502/en")
-    assert session.cookies == cookies
+def test_wiki_session_from_cookie_accepts_custom_ua() -> None:
+    ua = "Mozilla/5.0 Firefox/150.0"
+    session = WikiSession.from_cookie("tok", "https://docs.moodle.org/502/en", user_agent=ua)
     assert session.user_agent == ua
-    assert session.base_url == "https://docs.moodle.org/502/en"
 
 
 # ---------------------------------------------------------------------------
-# _request_json — session integration and 403 retry
+# _request_json — session integration and 403 re-prompt
 # ---------------------------------------------------------------------------
 
 def _mock_urlopen_response(payload: dict) -> MagicMock:
@@ -139,7 +162,7 @@ def _mock_urlopen_response(payload: dict) -> MagicMock:
 
 
 def test_request_json_injects_session_headers() -> None:
-    session = _fresh_session()
+    session = _session()
     captured: list[dict] = []
 
     def fake_urlopen(req, timeout, context):
@@ -153,9 +176,8 @@ def test_request_json_injects_session_headers() -> None:
     assert "cf_clearance=abc123" in captured[0].get("Cookie", "")
 
 
-def test_request_json_refreshes_on_403() -> None:
-    session = _fresh_session()
-    new_cookies = {"cf_clearance": "refreshed"}
+def test_request_json_reprompts_on_403() -> None:
+    session = _session()
     call_count = 0
 
     def fake_urlopen(req, timeout, context):
@@ -166,34 +188,21 @@ def test_request_json_refreshes_on_403() -> None:
         return _mock_urlopen_response({"ok": True})
 
     with patch("agentic_docs.wiki_ingest.urlopen", side_effect=fake_urlopen), \
-         patch("agentic_docs.wiki_ingest._acquire_cf_clearance", return_value=(new_cookies, "ua2")):
+         patch("builtins.input", side_effect=["new-cookie", ""]):
         result = _request_json("https://example.com/api", session=session)
 
     assert result == {"ok": True}
     assert call_count == 2
-    assert session.cookies == new_cookies
-
-
-def test_request_json_proactively_refreshes_stale_session() -> None:
-    session = _stale_session()
-    new_cookies = {"cf_clearance": "proactive"}
-
-    with patch("agentic_docs.wiki_ingest._acquire_cf_clearance", return_value=(new_cookies, "ua")) as mock_acq, \
-         patch("agentic_docs.wiki_ingest.urlopen", return_value=_mock_urlopen_response({"ok": True})):
-        _request_json("https://example.com/api", session=session)
-
-    mock_acq.assert_called_once()
-    assert session.cookies == new_cookies
+    assert session.cookies == {"cf_clearance": "new-cookie"}
 
 
 def test_request_json_reraises_non_403_http_errors() -> None:
-    session = _fresh_session()
+    session = _session()
 
     def fake_urlopen(req, timeout, context):
         raise HTTPError(url="u", code=500, msg="Server Error", hdrs={}, fp=None)
 
-    with patch("agentic_docs.wiki_ingest.urlopen", side_effect=fake_urlopen), \
-         patch("agentic_docs.wiki_ingest._acquire_cf_clearance", return_value=({"cf_clearance": "x"}, "ua")):
+    with patch("agentic_docs.wiki_ingest.urlopen", side_effect=fake_urlopen):
         try:
             _request_json("https://example.com/api", session=session)
             assert False, "Should have raised"

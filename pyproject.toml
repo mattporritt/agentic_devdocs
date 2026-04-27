@@ -29,9 +29,6 @@ dependencies = [
 dev = [
   "pytest>=8.2.0",
 ]
-userdocs = [
-  "playwright>=1.40.0",
-]
 
 [project.scripts]
 agentic-docs = "agentic_docs.cli:app"
