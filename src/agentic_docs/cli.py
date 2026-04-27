@@ -486,6 +486,7 @@ def ingest_userdocs(
     overlap_tokens: Annotated[int, typer.Option(help="Overlap tokens between adjacent chunks.")] = 60,
     max_pages: Annotated[int | None, typer.Option(help="Optional limit on pages to ingest.")] = None,
     append: Annotated[bool, typer.Option("--append", help="Add to an existing database without wiping it first.")] = False,
+    cf_clearance: Annotated[str | None, typer.Option("--cf-clearance", help="Cloudflare cf_clearance cookie value. Reads MOODLE_DOCS_CF_CLEARANCE env var if not set.")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Scrape the Moodle user documentation wiki and index it into SQLite."""
@@ -498,6 +499,7 @@ def ingest_userdocs(
         overlap_tokens=overlap_tokens,
         max_pages=max_pages,
         append=append,
+        cf_clearance=cf_clearance or os.environ.get("MOODLE_DOCS_CF_CLEARANCE"),
     )
     _emit(result, json_output)
 
@@ -515,6 +517,7 @@ def verify_userdocs(
     bundle_max_tokens: Annotated[int, typer.Option(help="Maximum tokens for evaluated context bundles in validation.")] = 450,
     baseline: Annotated[Path | None, typer.Option(help="Optional prior verify artifact to compare against.")] = None,
     allow_dirty: Annotated[bool, typer.Option(help="Allow validation to run from a dirty git working tree.")] = False,
+    cf_clearance: Annotated[str | None, typer.Option("--cf-clearance", help="Cloudflare cf_clearance cookie value. Reads MOODLE_DOCS_CF_CLEARANCE env var if not set.")] = None,
     json_output: Annotated[bool, typer.Option("--json", help="Emit machine-readable JSON output.")] = False,
 ) -> None:
     """Run a repeatable ingest, stats, and smoke-query workflow for Moodle user docs."""
@@ -528,6 +531,7 @@ def verify_userdocs(
         max_tokens=max_tokens,
         overlap_tokens=overlap_tokens,
         max_pages=max_pages,
+        cf_clearance=cf_clearance or os.environ.get("MOODLE_DOCS_CF_CLEARANCE"),
     )
     smoke_queries = [
         "adding a forum activity to a course",

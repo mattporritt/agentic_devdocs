@@ -106,6 +106,14 @@ def test_wiki_session_cookie_header_formats_correctly() -> None:
     assert "__cf_bm=xyz" in header
 
 
+def test_wiki_session_from_cookie_builds_session_without_playwright() -> None:
+    session = WikiSession.from_cookie("test-clearance-value", "https://docs.moodle.org/502/en")
+    assert session.cookies == {"cf_clearance": "test-clearance-value"}
+    assert session.base_url == "https://docs.moodle.org/502/en"
+    assert "Mozilla" in session.user_agent
+    assert session.needs_refresh() is False
+
+
 def test_wiki_session_acquire_calls_playwright_helper() -> None:
     cookies = {"cf_clearance": "tok"}
     ua = "Mozilla/5.0"

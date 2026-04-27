@@ -5,19 +5,21 @@
 
 """Bounded MediaWiki ingestion for the Moodle user documentation wiki.
 
-Cloudflare protection on docs.moodle.org requires a one-time browser-based
-challenge solve before scraping can proceed. This module uses Playwright to
-acquire a cf_clearance cookie (typically ~5 seconds), then hands off all
-subsequent MediaWiki API calls to plain urllib — so the browser is only
-active for the initial handshake, not per-page.
+docs.moodle.org is behind Cloudflare's Managed Challenge, which requires a
+real browser session cookie (cf_clearance) to access. There are two ways to
+supply it:
 
-Cookie refresh is handled transparently: on a mid-run 403 or when the
-session approaches its 30-minute expiry window, a new Playwright session
-is opened automatically and the run continues.
+1. Manual (recommended for developers):
+   Open docs.moodle.org/502/en in your regular browser, then copy the
+   cf_clearance cookie value from DevTools → Application → Cookies.
+   Pass it via --cf-clearance or set MOODLE_DOCS_CF_CLEARANCE in the env.
 
-Playwright must be installed separately:
-    pip install playwright
-    playwright install chromium
+2. Automatic (Playwright fallback, for sites using the auto-solvable JS
+   challenge only — docs.moodle.org currently requires the manual path):
+   pip install playwright && playwright install chromium
+
+All MediaWiki API calls use plain urllib with the cookie injected — no
+browser overhead during the actual scrape.
 """
 
 from __future__ import annotations
@@ -108,11 +110,18 @@ def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
 
     if "cf_clearance" not in cookies:
         raise RuntimeError(
-            "Cloudflare challenge did not resolve — cf_clearance cookie not present. "
-            "The site may require interactive login or have stricter bot detection."
+            "Cloudflare challenge did not resolve — cf_clearance cookie not present.\n\n"
+            "docs.moodle.org uses Cloudflare Managed Challenge, which cannot be solved\n"
+            "by an automated browser. Use the manual cookie workflow instead:\n\n"
+            "  1. Open https://docs.moodle.org/502/en in your regular browser\n"
+            "  2. DevTools → Application → Cookies → https://docs.moodle.org\n"
+            "  3. Copy the cf_clearance value\n"
+            "  4. Re-run with: --cf-clearance <value>\n"
+            "     or set env var: MOODLE_DOCS_CF_CLEARANCE=<value>\n\n"
+            "The cookie is typically valid for 30+ minutes."
         )
 
-    print(f"Clearance acquired.", flush=True)
+    print("Clearance acquired.", flush=True)
     return cookies, user_agent
 
 
@@ -145,8 +154,22 @@ class WikiSession:
 
     @classmethod
     def acquire(cls, base_url: str) -> WikiSession:
+        """Acquire a session via Playwright (for auto-solvable JS challenges)."""
         cookies, user_agent = _acquire_cf_clearance(base_url)
         return cls(cookies=cookies, user_agent=user_agent, base_url=base_url)
+
+    @classmethod
+    def from_cookie(cls, cf_clearance: str, base_url: str) -> WikiSession:
+        """Build a session from a cf_clearance cookie copied from a real browser."""
+        return cls(
+            cookies={"cf_clearance": cf_clearance},
+            user_agent=(
+                "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) "
+                "Chrome/124.0.0.0 Safari/537.36"
+            ),
+            base_url=base_url,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -450,11 +473,15 @@ def wiki_page_to_document(
 def fetch_wiki_documents(
     base_url: str,
     max_pages: int | None = None,
+    cf_clearance: str | None = None,
 ) -> tuple[WikiScrapeContext, list[DocumentModel]]:
     """Acquire a Cloudflare session, enumerate pages, and fetch each as a document model."""
 
     api_url = wiki_api_url(base_url)
-    session = WikiSession.acquire(base_url)
+    if cf_clearance:
+        session = WikiSession.from_cookie(cf_clearance, base_url)
+    else:
+        session = WikiSession.acquire(base_url)
     ctx = WikiScrapeContext(
         base_url=base_url.rstrip("/"),
         api_url=api_url,
@@ -492,11 +519,14 @@ def ingest_wiki_source(
     overlap_tokens: int,
     max_pages: int | None = None,
     append: bool = False,
+    cf_clearance: str | None = None,
 ) -> dict[str, int | str]:
     """Ingest the Moodle user documentation wiki into the shared SQLite schema."""
 
     tokenizer = get_tokenizer(tokenizer_name)
-    ctx, documents = fetch_wiki_documents(base_url=base_url, max_pages=max_pages)
+    ctx, documents = fetch_wiki_documents(
+        base_url=base_url, max_pages=max_pages, cf_clearance=cf_clearance
+    )
     store = SQLiteStore(db_path)
     store.initialize()
     if not append:
