@@ -25,10 +25,13 @@ browser overhead during the actual scrape.
 from __future__ import annotations
 
 import json
+import platform
+import random
 import re
 import ssl
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 from urllib.error import HTTPError
 from urllib.parse import quote, urlencode
@@ -61,28 +64,106 @@ _EXCESS_BLANK_LINES = re.compile(r"\n{3,}")
 # Cloudflare clearance
 # ---------------------------------------------------------------------------
 
-def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
-    """Launch a headless browser, solve the Cloudflare challenge, return (cookies, user_agent).
+def _find_chrome() -> str | None:
+    """Return the path to the system Chrome/Chromium binary, or None to use Playwright's bundled build."""
+    candidates: dict[str, list[str]] = {
+        "Darwin": [
+            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+            "/Applications/Chromium.app/Contents/MacOS/Chromium",
+        ],
+        "Linux": ["/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium"],
+        "Windows": [
+            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+        ],
+    }
+    for path in candidates.get(platform.system(), []):
+        if Path(path).exists():
+            return path
+    return None
 
-    The browser is closed as soon as the challenge resolves — typically within
-    a few seconds. All subsequent HTTP calls use the returned credentials via
-    plain urllib, so the browser is not kept alive during the scrape.
+
+def _jitter_mouse(page: Any) -> None:
+    """Move the mouse in a few randomised arcs to mimic human hand movement."""
+    for _ in range(random.randint(3, 6)):
+        page.mouse.move(
+            random.randint(150, 1100),
+            random.randint(100, 600),
+        )
+        page.wait_for_timeout(random.randint(40, 120))
+
+
+def _try_click_turnstile(page: Any) -> None:
+    """Click the Cloudflare Turnstile 'I am human' checkbox if it is visible.
+
+    The checkbox lives inside a cross-origin iframe served from
+    challenges.cloudflare.com. Playwright can interact with cross-origin
+    frames directly; bounding_box() returns viewport-relative coordinates so
+    page.mouse is used for the jittered click rather than element.click().
+    """
+    try:
+        cf_frame = next(
+            (f for f in page.frames if "challenges.cloudflare.com" in (f.url or "")),
+            None,
+        )
+        if cf_frame is None:
+            return
+        checkbox = cf_frame.locator("input[type='checkbox']").first
+        if not checkbox.is_visible(timeout=300):
+            return
+        box = checkbox.bounding_box()
+        if not box:
+            return
+        cx = box["x"] + box["width"] / 2
+        cy = box["y"] + box["height"] / 2
+        # Approach from a nearby random position, pause, then click with a tiny offset.
+        page.mouse.move(cx + random.uniform(-30, 30), cy + random.uniform(-30, 30))
+        page.wait_for_timeout(random.randint(250, 500))
+        page.mouse.move(cx + random.uniform(-3, 3), cy + random.uniform(-3, 3))
+        page.wait_for_timeout(random.randint(80, 180))
+        page.mouse.click(cx + random.uniform(-1, 1), cy + random.uniform(-1, 1))
+    except Exception:
+        pass  # Non-fatal — challenge may auto-solve or be a different variant
+
+
+_CF_AUTO_SOLVE_SECONDS = 30
+
+
+def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
+    """Open a visible browser, solve the Cloudflare challenge, return (cookies, user_agent).
+
+    Phase 1 (auto): polls for up to _CF_AUTO_SOLVE_SECONDS, trying to click the
+    Turnstile checkbox each tick.  The Cloudflare JS/fingerprint challenge often
+    auto-resolves without any interaction; the Turnstile 'I am human' click covers
+    the interactive variant.
+
+    Phase 2 (human-in-the-loop): if still blocked after the auto phase, the browser
+    window stays open and the user is prompted to solve the challenge manually, then
+    press Enter.  This reliably handles the Cloudflare Managed Challenge that detects
+    automation fingerprints.
+
+    The browser closes as soon as cf_clearance is obtained; all subsequent HTTP
+    requests use plain urllib with the captured cookie.
     """
     try:
         from playwright.sync_api import sync_playwright
     except ImportError:
         raise ImportError(
-            "Playwright is required to scrape Cloudflare-protected sites.\n"
+            "Playwright is required to acquire Cloudflare clearance.\n"
             "Install it with:\n"
             "  pip install playwright\n"
             "  playwright install chromium"
         )
 
-    print("Acquiring Cloudflare clearance via headless browser...", flush=True)
+    chrome_path = _find_chrome()
+    binary_label = chrome_path or "Playwright bundled Chromium"
+    print(f"Acquiring Cloudflare clearance ({binary_label})...", flush=True)
+
     with sync_playwright() as p:
         browser = p.chromium.launch(
-            headless=True,
-            # Suppress the automation flag that Cloudflare fingerprints.
+            headless=False,
+            executable_path=chrome_path,  # None → bundled Chromium
+            slow_mo=random.randint(20, 50),
             args=["--disable-blink-features=AutomationControlled"],
         )
         context = browser.new_context(
@@ -91,34 +172,50 @@ def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
         )
         page = context.new_page()
 
-        # "domcontentloaded" returns as soon as the initial HTML is parsed.
-        # Cloudflare's JS challenge makes continuous network requests while
-        # computing, so "networkidle" (which needs 500 ms of silence) times
-        # out before the challenge ever resolves. We instead return early and
-        # poll the page title below to detect when the real page arrives.
+        # Jitter before navigation so the browser doesn't look like it jumped
+        # straight to the target URL from a cold start.
+        _jitter_mouse(page)
+
         page.goto(url, wait_until="domcontentloaded", timeout=60_000)
 
-        # Poll up to 30 s for the challenge to clear (title leaves "Just a moment...").
-        for _ in range(30):
-            if "just a moment" not in (page.title() or "").lower():
+        # --- Phase 1: auto-solve ---
+        for tick in range(_CF_AUTO_SOLVE_SECONDS):
+            cookies = {c["name"]: c["value"] for c in context.cookies()}
+            if "cf_clearance" in cookies:
                 break
-            page.wait_for_timeout(1_000)
+            if tick % 5 == 0:
+                print(f"  auto-solving… ({tick}s, title={page.title()!r})", flush=True)
+            _try_click_turnstile(page)
+            page.wait_for_timeout(random.randint(900, 1100))
 
         cookies = {c["name"]: c["value"] for c in context.cookies()}
+
+        # --- Phase 2: human-in-the-loop ---
+        if "cf_clearance" not in cookies:
+            print(
+                "\n[ACTION REQUIRED]\n"
+                "The Cloudflare challenge requires human interaction.\n"
+                "A browser window is open. Please:\n"
+                "  1. Click the 'I am human' / 'Verify you are human' checkbox.\n"
+                "  2. Wait for the Moodle docs page to load.\n"
+                "  3. Press Enter here to continue.",
+                flush=True,
+            )
+            input()  # block until user confirms
+            cookies = {c["name"]: c["value"] for c in context.cookies()}
+
         user_agent: str = page.evaluate("() => navigator.userAgent")
         browser.close()
 
     if "cf_clearance" not in cookies:
         raise RuntimeError(
-            "Cloudflare challenge did not resolve — cf_clearance cookie not present.\n\n"
-            "docs.moodle.org uses Cloudflare Managed Challenge, which cannot be solved\n"
-            "by an automated browser. Use the manual cookie workflow instead:\n\n"
-            "  1. Open https://docs.moodle.org/502/en in your regular browser\n"
-            "  2. DevTools → Application → Cookies → https://docs.moodle.org\n"
-            "  3. Copy the cf_clearance value\n"
-            "  4. Re-run with: --cf-clearance <value>\n"
-            "     or set env var: MOODLE_DOCS_CF_CLEARANCE=<value>\n\n"
-            "The cookie is typically valid for 30+ minutes."
+            "Cloudflare challenge was not resolved.\n\n"
+            "If the browser closed before you could solve the challenge, re-run\n"
+            "and solve it when prompted, or use the manual cookie workflow:\n"
+            "  1. Open the URL in your regular browser\n"
+            "  2. DevTools → Application → Cookies — copy cf_clearance\n"
+            "  3. Re-run with: --cf-clearance <value>\n"
+            "     or set: MOODLE_DOCS_CF_CLEARANCE=<value>"
         )
 
     print("Clearance acquired.", flush=True)
