@@ -72,17 +72,14 @@ _DEFAULT_USER_AGENT = (
 # Cloudflare clearance
 # ---------------------------------------------------------------------------
 
-def _find_chrome() -> str | None:
-    """Return the path to the system Chrome/Chromium binary, or None to use Playwright's bundled build."""
+def _find_firefox() -> str | None:
+    """Return the path to the system Firefox binary, or None to use Playwright's bundled build."""
     candidates: dict[str, list[str]] = {
-        "Darwin": [
-            "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
-            "/Applications/Chromium.app/Contents/MacOS/Chromium",
-        ],
-        "Linux": ["/usr/bin/google-chrome", "/usr/bin/chromium-browser", "/usr/bin/chromium"],
+        "Darwin": ["/Applications/Firefox.app/Contents/MacOS/firefox"],
+        "Linux": ["/usr/bin/firefox", "/usr/bin/firefox-esr", "/usr/lib/firefox/firefox"],
         "Windows": [
-            r"C:\Program Files\Google\Chrome\Application\chrome.exe",
-            r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+            r"C:\Program Files\Mozilla Firefox\firefox.exe",
+            r"C:\Program Files (x86)\Mozilla Firefox\firefox.exe",
         ],
     }
     for path in candidates.get(platform.system(), []):
@@ -160,19 +157,18 @@ def _acquire_cf_clearance(url: str) -> tuple[dict[str, str], str]:
             "Playwright is required to acquire Cloudflare clearance.\n"
             "Install it with:\n"
             "  pip install playwright\n"
-            "  playwright install chromium"
+            "  playwright install firefox"
         )
 
-    chrome_path = _find_chrome()
-    binary_label = chrome_path or "Playwright bundled Chromium"
+    firefox_path = _find_firefox()
+    binary_label = firefox_path or "Playwright bundled Firefox"
     print(f"Acquiring Cloudflare clearance ({binary_label})...", flush=True)
 
     with sync_playwright() as p:
-        browser = p.chromium.launch(
+        browser = p.firefox.launch(
             headless=False,
-            executable_path=chrome_path,  # None → bundled Chromium
+            executable_path=firefox_path,  # None → bundled Firefox
             slow_mo=random.randint(20, 50),
-            args=["--disable-blink-features=AutomationControlled"],
         )
         context = browser.new_context(
             viewport={"width": 1280, "height": 720},
