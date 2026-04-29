@@ -35,6 +35,41 @@ def _extract_contract_file_anchors(texts: list[str]) -> list[str]:
     return anchors
 
 
+def _is_generic_contract_anchor(anchor: str) -> bool:
+    normalized = anchor.strip().strip("`")
+    basename = normalized.rsplit("/", 1)[-1].lower()
+    if "/" in normalized.strip().strip("/"):
+        return False
+    if basename in {"mywidget.mustache", "behat.yml"}:
+        return True
+    return bool(re.match(r"^(?:my|your|example|sample|demo)[a-z0-9_-]*\.(?:php|mustache|js|css|scss|md|yml)$", basename))
+
+
+def _anchor_priority(anchor: str, profile) -> tuple[int, int, str]:
+    normalized = anchor.strip().strip("`")
+    lowered = normalized.lower()
+    basename = lowered.rsplit("/", 1)[-1]
+    expected_file_match = sum(1 for hint in profile.file_hints if hint.lower() == lowered or hint.lower().rsplit("/", 1)[-1] == basename)
+    expected_subtree_match = sum(1 for hint in profile.subtree_hints if hint in lowered)
+    path_like = 1 if "/" in normalized.strip().strip("/") else 0
+    generic = 0 if _is_generic_contract_anchor(normalized) else 1
+    return (expected_file_match * 10) + (expected_subtree_match * 6) + (path_like * 3) + generic, len(normalized), normalized
+
+
+def _filter_contract_file_anchors(anchors: list[str], profile) -> list[str]:
+    if not anchors:
+        return []
+    ranked = sorted(anchors, key=lambda anchor: _anchor_priority(anchor, profile), reverse=True)
+    has_path_like = any("/" in anchor.strip().strip("/") for anchor in ranked)
+    filtered: list[str] = []
+    for anchor in ranked:
+        if has_path_like and _is_generic_contract_anchor(anchor):
+            continue
+        if anchor not in filtered:
+            filtered.append(anchor)
+    return filtered or ranked
+
+
 def _content_without_heading_prefix(content: str) -> str:
     lines = [line.strip() for line in content.splitlines()]
     filtered = [line for line in lines if line and not line.startswith("Heading: ")]
@@ -120,7 +155,7 @@ def build_runtime_contract(query_text: str, bundles: list, top_k: int) -> Runtim
             )
             for chunk in bundle.chunks
         ]
-        file_anchors = _extract_contract_file_anchors([chunk.content for chunk in bundle.chunks])
+        file_anchors = _filter_contract_file_anchors(_extract_contract_file_anchors([chunk.content for chunk in bundle.chunks]), profile)
         source_name = infer_source_name(bundle.source_file_path, bundle.source_name, bundle.source_type)
         source_type = infer_source_type(bundle.source_file_path, bundle.source_name, bundle.source_type)
         results.append(

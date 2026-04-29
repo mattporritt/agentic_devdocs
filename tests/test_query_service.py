@@ -69,6 +69,15 @@ def test_build_query_profile_detects_flow_and_requirement_intents() -> None:
     assert "privacy" in requirement_profile.concept_families
 
 
+def test_build_query_profile_extracts_file_and_subtree_hints() -> None:
+    profile = build_query_profile("Find theme/boost loginform.mustache and login.scss for the login UI.")
+
+    assert "loginform.mustache" in profile.file_hints
+    assert "login.scss" in profile.file_hints
+    assert "theme/boost" in profile.subtree_hints
+    assert profile.task_intent == "file_location"
+
+
 def test_build_query_profile_detects_design_system_family() -> None:
     profile = build_query_profile("How do I use CSS tokens from the Moodle design system?")
 
@@ -443,6 +452,40 @@ def test_query_prefers_output_api_renderer_section_over_templates_renderer_secti
 
     assert results[0].source_file_path == "apis/subsystems/output/index.md"
     assert float(results[0].rerank_breakdown["family_specific_bonus"]) > 0
+
+
+def test_query_penalizes_generic_template_examples_for_implementation_style_render_query(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "guides" / "templates").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "output").mkdir(parents=True)
+    (docs_dir / "guides" / "templates" / "index.md").write_text(
+        "---\n"
+        "title: Templates\n"
+        "---\n\n"
+        "## Renderers\n\n"
+        "The example renderable uses `mywidget.mustache` to demonstrate template rendering.\n",
+        encoding="utf-8",
+    )
+    (docs_dir / "apis" / "subsystems" / "output" / "index.md").write_text(
+        "---\n"
+        "title: Output API\n"
+        "---\n\n"
+        "## Page Output Journey\n\n"
+        "Boost login output customisation inspects `theme/boost/templates/core/loginform.mustache` and "
+        "`theme/boost/scss/moodle/login.scss` through the Output API renderer flow.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_source(source=docs_dir, db_path=db_path, tokenizer_name="openai", max_tokens=160, overlap_tokens=5)
+
+    results = query_chunks(
+        db_path=db_path,
+        query_text="For MDL-88194, find the exact Boost login files including theme/boost loginform.mustache and login.scss.",
+        top_k=2,
+    )
+
+    assert results[0].source_file_path == "apis/subsystems/output/index.md"
+    assert float(results[0].rerank_breakdown["query_anchor_bonus"]) > float(results[1].rerank_breakdown["query_anchor_bonus"])
 
 
 def test_query_prefers_events_concept_page_over_incidental_plugin_page(tmp_path: Path) -> None:

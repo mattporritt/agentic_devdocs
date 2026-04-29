@@ -286,6 +286,40 @@ def test_cli_query_json_contract_for_design_system_query(tmp_path: Path) -> None
     assert payload.results[0].content.sections[0].source_path == "design_system/styles/colours-32c91c.md"
 
 
+def test_cli_query_json_contract_filters_generic_example_file_anchors_when_concrete_paths_exist(tmp_path: Path) -> None:
+    docs_dir = tmp_path / "docs"
+    (docs_dir / "apis" / "subsystems" / "output").mkdir(parents=True)
+    (docs_dir / "apis" / "subsystems" / "output" / "index.md").write_text(
+        "---\n"
+        "title: Output API\n"
+        "---\n\n"
+        "## Renderers\n\n"
+        "Generic examples might mention `mywidget.mustache`, but concrete output guidance should inspect "
+        "`theme/boost/templates/core/loginform.mustache` and `theme/boost/scss/moodle/login.scss`.\n",
+        encoding="utf-8",
+    )
+    db_path = tmp_path / "docs.db"
+    ingest_result = runner.invoke(app, ["ingest", "--source", str(docs_dir), "--db-path", str(db_path), "--json"])
+    assert ingest_result.exit_code == 0
+
+    result = runner.invoke(
+        app,
+        [
+            "query",
+            "For MDL-88194, find the exact Boost login files including theme/boost loginform.mustache and login.scss.",
+            "--db-path",
+            str(db_path),
+            "--json-contract",
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = RuntimeContractEnvelope.model_validate_json(result.stdout)
+    assert "theme/boost/templates/core/loginform.mustache" in payload.results[0].content.file_anchors
+    assert "theme/boost/scss/moodle/login.scss" in payload.results[0].content.file_anchors
+    assert "mywidget.mustache" not in payload.results[0].content.file_anchors
+
+
 def test_cli_query_json_contract_is_stable_for_combined_query(tmp_path: Path) -> None:
     docs_dir = tmp_path / "docs"
     (docs_dir / "apis" / "subsystems" / "output").mkdir(parents=True)

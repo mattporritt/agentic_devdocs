@@ -94,6 +94,8 @@ class QueryProfile:
     intent: str
     concept_families: list[str]
     task_intent: str
+    file_hints: list[str]
+    subtree_hints: list[str]
 
 
 def canonical_path_key(path: str) -> str:
@@ -153,7 +155,8 @@ FLOW_QUERY_PATTERN = re.compile(
 IMPLEMENTATION_QUERY_PATTERN = re.compile(
     r"\b(how do i implement|how do i write|how do i add|how do i configure|how do i define|how do i wire up|what do i need to implement|how do .*registered|how do .*declare)\b"
 )
-FILE_ANCHOR_PATTERN = re.compile(r"`?([A-Za-z0-9_./-]+\.(?:php|mdx|md|js|mustache|yml))`?")
+FILE_ANCHOR_PATTERN = re.compile(r"`?([A-Za-z0-9_./-]+\.(?:php|mdx|md|js|mustache|yml|css|scss))`?")
+QUERY_PATH_HINT_PATTERN = re.compile(r"([A-Za-z0-9_.-]+(?:/[A-Za-z0-9_.-]+){1,})")
 
 
 def classify_task_intent(query_text: str, tokens: list[str]) -> str:
@@ -247,6 +250,15 @@ def build_query_profile(query_text: str) -> QueryProfile:
 
     normalized_query, tokens = normalize_query_text(query_text)
     expanded_tokens = _expanded_tokens(tokens)
+    file_hints = _extract_query_file_hints(query_text)
+    subtree_hints = _extract_query_subtree_hints(query_text)
+    task_intent = classify_task_intent(query_text, tokens)
+    if task_intent == "general" and (file_hints or subtree_hints):
+        lowered = query_text.lower()
+        if any(token in tokens for token in {"exact", "file", "files", "path", "paths", "inspect", "change", "mirror"}):
+            task_intent = "implementation_guide"
+        elif any(text in lowered for text in ("where ", "find ", "locate ")):
+            task_intent = "file_location"
     return QueryProfile(
         raw_query=query_text,
         normalized_query=normalized_query,
@@ -254,8 +266,80 @@ def build_query_profile(query_text: str) -> QueryProfile:
         expanded_tokens=expanded_tokens,
         intent=classify_query_intent(query_text, tokens),
         concept_families=_concept_families(tokens),
-        task_intent=classify_task_intent(query_text, tokens),
+        task_intent=task_intent,
+        file_hints=file_hints,
+        subtree_hints=subtree_hints,
     )
+
+
+def _extract_query_file_hints(query_text: str) -> list[str]:
+    hints: list[str] = []
+    for match in FILE_ANCHOR_PATTERN.findall(query_text):
+        normalized = match.strip().strip("`")
+        if normalized and normalized not in hints:
+            hints.append(normalized)
+    return hints
+
+
+def _extract_query_subtree_hints(query_text: str) -> list[str]:
+    hints: list[str] = []
+    for match in QUERY_PATH_HINT_PATTERN.findall(query_text):
+        normalized = match.strip().strip("/").strip("`").lower()
+        if not normalized or "." in Path(normalized).name:
+            continue
+        if normalized not in hints:
+            hints.append(normalized)
+    return hints
+
+
+def _is_generic_example_anchor(anchor: str) -> bool:
+    basename = Path(anchor).name.lower()
+    if "/" in anchor.strip().strip("/"):
+        return False
+    if basename in {"mywidget.mustache", "behat.yml"}:
+        return True
+    return bool(re.match(r"^(?:my|your|example|sample|demo)[a-z0-9_-]*\.(?:php|mustache|js|css|scss|md|yml)$", basename))
+
+
+def _query_anchor_bonus(result: QueryResult, profile: QueryProfile) -> float:
+    if profile.task_intent not in {"implementation_guide", "file_location"}:
+        return 0.0
+
+    score = 0.0
+    anchors = _extract_file_anchors(result.content)
+    anchor_text = " ".join(anchor.lower() for anchor in anchors)
+    heading_text = " > ".join(result.heading_path).lower()
+    section_text = (result.section_title or "").lower()
+    title_text = result.document_title.lower()
+    content_text = result.content.lower()
+    combined_text = " ".join(part for part in (heading_text, section_text, title_text, content_text) if part)
+
+    matched_file_hint = False
+    if profile.file_hints:
+        for hint in profile.file_hints:
+            lowered_hint = hint.lower()
+            basename = Path(lowered_hint).name
+            if lowered_hint in anchor_text:
+                score += 22.0
+                matched_file_hint = True
+            elif basename and basename in combined_text:
+                score += 12.0
+                matched_file_hint = True
+        if anchors and not matched_file_hint:
+            score -= 12.0
+            if any(_is_generic_example_anchor(anchor) for anchor in anchors):
+                score -= 12.0
+
+    matched_subtree_hint = False
+    if profile.subtree_hints:
+        for hint in profile.subtree_hints:
+            if hint in combined_text or hint in anchor_text:
+                score += 14.0
+                matched_subtree_hint = True
+        if anchors and not matched_subtree_hint:
+            score -= 6.0
+
+    return score
 
 
 def _build_fts_queries(query_text: str) -> list[str]:
@@ -682,6 +766,7 @@ def _score_result(result: QueryResult, profile: QueryProfile) -> tuple[float, di
     example_penalty = _example_penalty(result)
     quality_adjustment = _chunk_quality_adjustment(result)
     generic_penalty = _generic_chunk_penalty(result, heading_overlap, title_overlap, path_overlap)
+    query_anchor_bonus = _query_anchor_bonus(result, profile)
 
     weighted_score = (
         lexical_score
@@ -706,6 +791,7 @@ def _score_result(result: QueryResult, profile: QueryProfile) -> tuple[float, di
         + example_penalty
         + quality_adjustment
         + generic_penalty
+        + query_anchor_bonus
     )
     breakdown: dict[str, float | int | str | list[str]] = {
         "lexical_score": round(lexical_score, 3),
@@ -732,6 +818,7 @@ def _score_result(result: QueryResult, profile: QueryProfile) -> tuple[float, di
         "example_penalty": example_penalty,
         "quality_adjustment": quality_adjustment,
         "generic_penalty": generic_penalty,
+        "query_anchor_bonus": query_anchor_bonus,
         "expanded_tokens": expanded_tokens,
         "weighted_score": round(weighted_score, 3),
     }
